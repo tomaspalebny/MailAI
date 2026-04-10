@@ -1,6 +1,7 @@
 import os
 import json
 import base64
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from openai import OpenAI
@@ -35,7 +36,34 @@ reply_deadline: dnes|tento_tyden|zadny
 suggested_reply: návrh odpovědi nebo null
 Zohledni custom pravidla uživatele."""
 
-INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam e-mailů a vrať JSON {"emails": [...]} se stejnými poli jako u jednoho e-mailu. Řaď od nejvyšší priority."""
+INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam nepřečtených e-mailů a vrať pouze validní JSON s touto strukturou:
+{
+    "overview": "stručný souhrn",
+    "counts": {
+        "urgentni": number,
+        "stredne_dulezite": number,
+        "pocka": number,
+        "k_preposlani": number,
+        "ignorovat": number
+    },
+    "buckets": {
+        "urgentni": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
+        "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
+        "pocka": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
+        "k_preposlani": [{"id":"...","subject":"...","from":"...","reason":"...","forward_to":"...","action":"..."}],
+        "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"smazat|oznacit_jako_prectene|ignorovat"}]
+    },
+    "recommended_bulk_actions": {
+        "mark_read_ids": ["..."],
+        "delete_ids": ["..."]
+    }
+}
+Pravidla:
+- Použij jen kategorie: urgentni, stredne_dulezite, pocka, k_preposlani, ignorovat.
+- Každý e-mail zařaď právě do jedné kategorie.
+- Buď konzervativní u mazání: do delete dávej jen zjevný spam/newsletter bez akční hodnoty.
+- Odpovídej česky.
+"""
 
 
 def check_auth():
@@ -143,14 +171,24 @@ def analyze_inbox():
         return jsonify({"error": "Unauthorized"}), 401
     data = request.json or {}
     token = data.get("token")
-    top = int(data.get("top", 20))
+    if not token:
+        return jsonify({"error": "Missing Graph token in request (token)."}), 400
+
+    top = int(data.get("top", 200))
+    days = int(data.get("days", 10))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     prompt = merge_prompt(data.get("customPrompt") or INBOX_PROMPT, data.get("prioritySenders") or [])
     priority_senders = [s.lower() for s in (data.get("prioritySenders") or [])]
 
     r = requests.get(
         "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
         headers={"Authorization": f"Bearer {token}"},
-        params={"$select":"id,subject,from,receivedDateTime,bodyPreview,isRead,importance", "$top": top, "$orderby":"receivedDateTime DESC"},
+        params={
+            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance",
+            "$top": top,
+            "$orderby": "receivedDateTime DESC",
+            "$filter": f"isRead eq false and receivedDateTime ge {since}",
+        },
         timeout=20,
     )
     r.raise_for_status()
@@ -171,7 +209,14 @@ def analyze_inbox():
             "priorityBoost": any(s in sender.lower() for s in priority_senders),
         })
 
-    user_text = json.dumps(items, ensure_ascii=False)
+    user_text = json.dumps(
+        {
+            "window_days": days,
+            "total_unread_fetched": len(items),
+            "emails": items,
+        },
+        ensure_ascii=False,
+    )
     try:
         client = get_client(data)
         resp = client.chat.completions.create(
