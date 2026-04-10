@@ -2,10 +2,10 @@
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="MailApp">
   <Id>e1b3c5d7-9f2a-4b6e-8d1c-3a5f7e9b0d2c</Id><Version>1.0.0</Version><ProviderName>MUNI ESF</ProviderName><DefaultLocale>cs-CZ</DefaultLocale>
   <DisplayName DefaultValue="📬 Email Triage AI"/><Description DefaultValue="AI asistent pro třídění e-mailů."/>
-  <IconUrl DefaultValue="https://YOUR-SERVER.onrender.com/assets/icon-64.png"/><HighResolutionIconUrl DefaultValue="https://YOUR-SERVER.onrender.com/assets/icon-128.png"/><SupportUrl DefaultValue="https://YOUR-SERVER.onrender.com"/>
+  <IconUrl DefaultValue="https://mailai-kr2k.onrender.com/assets/icon-64.png"/><HighResolutionIconUrl DefaultValue="https://mailai-kr2k.onrender.com/assets/icon-128.png"/><SupportUrl DefaultValue="https://mailai-kr2k.onrender.com"/>
   <Hosts><Host Name="Mailbox"/></Hosts>
   <Requirements><Sets><Set Name="Mailbox" MinVersion="1.1"/></Sets></Requirements>
-  <FormSettings><Form xsi:type="ItemRead"><DesktopSettings><SourceLocation DefaultValue="https://YOUR-SERVER.onrender.com/taskpane.html"/><RequestedHeight>520</RequestedHeight></DesktopSettings></Form></FormSettings>
+  <FormSettings><Form xsi:type="ItemRead"><DesktopSettings><SourceLocation DefaultValue="https://mailai-kr2k.onrender.com/taskpane.html"/><RequestedHeight>520</RequestedHeight></DesktopSettings></Form></FormSettings>
   <Permissions>ReadItem</Permissions>
   <Rule xsi:type="RuleCollection" Mode="Or"><Rule xsi:type="ItemIs" ItemType="Message" FormType="Read"/></Rule>
 </OfficeApp>

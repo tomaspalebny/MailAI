@@ -34,8 +34,8 @@ AI asistent pro třídění, sumarizaci a návrhy odpovědí na e-maily přímo 
 
 ### 2. Aktualizujte manifest
 
-V `manifest.xml` nahraďte všechny výskyty `YOUR-SERVER.onrender.com`
-vaší skutečnou URL z Render.com.
+V `manifest.xml` je již nastavená produkční URL:
+`https://mailai-kr2k.onrender.com`.
 
 ### 3. Hostujte taskpane.html
 
