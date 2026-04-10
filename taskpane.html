@@ -1,572 +1,97 @@
 <!DOCTYPE html>
-<html lang="cs">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Email Triage AI</title>
-  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      font-size: 14px;
-      color: #1a1a1a;
-      background: #fafafa;
-      padding: 16px;
-      line-height: 1.5;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid #e0e0e0;
-    }
-    .header h1 {
-      font-size: 16px;
-      font-weight: 600;
-    }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 16px;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn-primary {
-      background: #0078d4;
-      color: white;
-    }
-    .btn-primary:hover { background: #106ebe; }
-    .btn-primary:disabled {
-      background: #c0c0c0;
-      cursor: not-allowed;
-    }
-    .btn-secondary {
-      background: #f0f0f0;
-      color: #333;
-      border: 1px solid #d0d0d0;
-    }
-    .btn-secondary:hover { background: #e4e4e4; }
-    .btn-copy {
-      background: none;
-      border: 1px solid #d0d0d0;
-      padding: 4px 10px;
-      font-size: 12px;
-      border-radius: 4px;
-      color: #555;
-      cursor: pointer;
-    }
-    .btn-copy:hover { background: #f0f0f0; }
+<html lang="cs"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Email Triage AI</title><script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script><style>
+body{font-family:Segoe UI,sans-serif;padding:14px;background:#fafafa;color:#1a1a1a}
+.row{margin-bottom:10px}
+label{display:block;font-size:12px;font-weight:600;margin-bottom:4px;color:#444}
+input,textarea,select{width:100%;box-sizing:border-box;padding:8px;border:1px solid #d0d0d0;border-radius:6px;background:#fff}
+textarea{resize:vertical}
+.btn{padding:8px 12px;border:0;background:#0078d4;color:#fff;border-radius:6px;cursor:pointer}
+.btn2{background:#f0f0f0;color:#222}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.card{border:1px solid #ddd;border-radius:8px;padding:12px;margin-top:12px;white-space:pre-wrap;background:#fff}
+.small{font-size:12px;color:#666}
+.tabs{display:flex;gap:6px;margin:10px 0 12px}.tab{padding:8px 10px;border:1px solid #d0d0d0;background:#fff;border-radius:6px;cursor:pointer;font-size:13px}.tab.active{background:#0078d4;color:#fff;border-color:#0078d4}
+.section{display:none}.section.active{display:block}
+.list{margin:0;padding-left:18px}.muted{color:#666;font-size:12px}
+</style></head><body>
+<h2>📬 Email Triage AI</h2>
+<div class="tabs"><button class="tab active" data-tab="analyze">Analýza</button><button class="tab" data-tab="settings">Nastavení</button><button class="tab" data-tab="rules">Pravidla</button></div>
 
-    .actions { display: flex; gap: 8px; margin-bottom: 16px; }
+<div id="analyze" class="section active">
+  <div class="row"><button class="btn btn2" onclick="loadFromSettings()">Načíst uložené nastavení</button> <button class="btn" onclick="analyzeCurrent()">Analyzovat e-mail</button></div>
+  <div id="out" class="card" style="display:none"></div>
+</div>
 
-    /* Loading */
-    .loading {
-      display: none;
-      text-align: center;
-      padding: 32px 16px;
-    }
-    .loading.active { display: block; }
-    .spinner {
-      width: 32px; height: 32px;
-      border: 3px solid #e0e0e0;
-      border-top-color: #0078d4;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin: 0 auto 12px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .loading p { color: #666; font-size: 13px; }
+<div id="settings" class="section">
+  <div class="row"><label>Backend URL</label><input id="apiUrl" placeholder="https://...render.com"></div>
+  <div class="row"><label>API key (volitelné)</label><input id="apiKey" type="password"></div>
+  <div class="row"><label>Model</label><select id="model"><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option></select></div>
+  <div class="row"><label>Automaticky načíst při startu</label><select id="autoload"><option value="yes">Ano</option><option value="no">Ne</option></select></div>
+  <div class="row"><button class="btn" onclick="saveCfg()">Uložit do Outlooku</button></div>
+  <div class="small">Ukládá se do Outlook roaming settings, takže se nastavení přenese mezi zařízeními v rámci profilu.</div>
+</div>
 
-    /* Result cards */
-    .result { display: none; }
-    .result.active { display: block; }
+<div id="rules" class="section">
+  <div class="row"><label>Custom prompt</label><textarea id="customPrompt" rows="12" placeholder="Napište pravidla pro prioritizaci, deadline, odpovědi..."></textarea></div>
+  <div class="row"><label>Preferovaní odesílatelé</label><textarea id="prioritySenders" rows="5" placeholder="dekan@...
+rektor@...
+it@..."></textarea></div>
+  <div class="row"><label>Šablony prioritizace</label><select id="promptTemplate" onchange="applyTemplate()"><option value="">-- vybrat --</option><option value="university">Univerzita / administrativa</option><option value="it">IT provoz</option><option value="student">Studenti / výuka</option></select></div>
+  <div class="row"><button class="btn btn2" onclick="saveRules()">Uložit pravidla</button></div>
+  <div class="small">Tip: custom prompt může obsahovat konkrétní instrukce typu „vyžaduj odpověď u děkana, vedení, studentů s deadline do 48 hodin".</div>
+</div>
 
-    .card {
-      background: white;
-      border: 1px solid #e8e8e8;
-      border-radius: 8px;
-      padding: 14px;
-      margin-bottom: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    }
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-    .card-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: #555;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
+<script>
+const ROAMING_KEYS = {
+  apiUrl:'apiUrl', apiKey:'apiKey', model:'model', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload'
+};
+let cfg = {apiUrl:'',apiKey:'',model:'gpt-4o-mini',customPrompt:'',prioritySenders:'',autoload:'yes'};
 
-    .priority-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px 10px;
-      border-radius: 20px;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .priority-P0 { background: #fde8e8; color: #c62828; }
-    .priority-P1 { background: #fff3e0; color: #e65100; }
-    .priority-P2 { background: #e3f2fd; color: #1565c0; }
-    .priority-P3 { background: #f5f5f5; color: #757575; }
+function tabs(){document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById(t.dataset.tab).classList.add('active')}))}
+function setVal(id,val){document.getElementById(id).value = val ?? ''}
+function getVal(id){return document.getElementById(id).value}
+function saveToRoaming(){const rs=Office.context.roamingSettings; Object.entries(cfg).forEach(([k,v])=>rs.set(k,v)); rs.saveAsync(()=>{})}
+function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={}; Object.values(ROAMING_KEYS).forEach(k=>cfg[k]=rs.get(k)||cfg[k]||''); setVal('apiUrl',cfg.apiUrl); setVal('apiKey',cfg.apiKey); setVal('model',cfg.model||'gpt-4o-mini'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
+function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.apiKey=getVal('apiKey'); cfg.model=getVal('model'); cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload')}
+function saveCfg(){syncFromInputs(); saveToRoaming(); show('Uloženo do Outlooku.')}
+function saveRules(){syncFromInputs(); saveToRoaming(); show('Pravidla uložena.')}
+function loadFromSettings(){loadFromRoaming(); show('Nastavení načteno.')}
 
-    .category-tag {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 12px;
-      background: #f0f0f0;
-      color: #444;
-    }
-    .meta-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      margin-bottom: 10px;
-      flex-wrap: wrap;
-    }
-    .deadline-tag {
-      font-size: 12px;
-      color: #c62828;
-      font-weight: 500;
-    }
+function renderAnalysis(data){
+  const html = `
+    <div><strong>Priorita:</strong> ${data.priority || ''}</div>
+    <div><strong>Kategorie:</strong> ${data.category || ''}</div>
+    <div style="margin-top:8px"><strong>Souhrn:</strong><br>${escapeHtml(data.summary || '')}</div>
+    <div style="margin-top:8px"><strong>Odpověď:</strong><br>${escapeHtml(data.suggested_reply || '')}</div>
+    <div style="margin-top:10px"><button class="btn btn2" onclick="insertReply(${json.dumps('')})">Vložit odpověď do reply okna</button></div>
+  `;
+  show(html, true);
+  lastReplyText = data.suggested_reply || '';
+}
 
-    .summary-text {
-      font-size: 14px;
-      color: #222;
-      line-height: 1.6;
-    }
+let lastReplyText = '';
+function show(x, raw=false){const o=document.getElementById('out'); o.style.display='block'; o.innerHTML = raw ? x : escapeHtml(x)}
+function escapeHtml(t){return (t||'').replace(/[&<>"]+/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+function insertReply(){
+  const reply = lastReplyText || '';
+  const item = Office.context.mailbox.item;
+  if (!reply) { show('Není co vložit.'); return; }
+  if (item && item.displayReplyForm) {
+    item.displayReplyForm(reply);
+    return;
+  }
+  if (item && item.body && item.body.setSelectedDataAsync) {
+    item.body.setSelectedDataAsync(reply, { coercionType: Office.CoercionType.Text }, function(){ show('Odpověď vložena.'); });
+    return;
+  }
+  show('Váš Outlook nepodporuje přímé vložení v tomto režimu.');
+}
 
-    .reply-box {
-      background: #f8fafe;
-      border: 1px solid #d0dff0;
-      border-radius: 6px;
-      padding: 12px;
-      font-size: 13px;
-      line-height: 1.6;
-      color: #1a1a1a;
-      white-space: pre-wrap;
-      position: relative;
-    }
-    .reply-box .btn-copy {
-      position: absolute;
-      top: 8px;
-      right: 8px;
-    }
-
-    .error-msg {
-      display: none;
-      background: #fde8e8;
-      border: 1px solid #f5c6c6;
-      color: #c62828;
-      padding: 12px;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .error-msg.active { display: block; }
-
-    /* Inbox summary mode */
-    .inbox-list { list-style: none; }
-    .inbox-item {
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
-      padding: 10px 0;
-      border-bottom: 1px solid #f0f0f0;
-    }
-    .inbox-item:last-child { border-bottom: none; }
-    .inbox-priority { flex-shrink: 0; margin-top: 2px; }
-    .inbox-content { flex: 1; min-width: 0; }
-    .inbox-subject {
-      font-weight: 500;
-      font-size: 13px;
-      margin-bottom: 2px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .inbox-summary-text {
-      font-size: 12px;
-      color: #666;
-    }
-
-    .tab-bar {
-      display: flex;
-      gap: 0;
-      margin-bottom: 16px;
-      border-bottom: 2px solid #e0e0e0;
-    }
-    .tab {
-      padding: 8px 16px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      background: none;
-      color: #666;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -2px;
-      transition: color 0.15s;
-    }
-    .tab.active {
-      color: #0078d4;
-      border-bottom-color: #0078d4;
-    }
-    .tab:hover { color: #333; }
-
-    .panel { display: none; }
-    .panel.active { display: block; }
-
-    .settings-section { margin-top: 8px; }
-    .settings-section label {
-      display: block;
-      font-size: 13px;
-      font-weight: 500;
-      margin-bottom: 4px;
-      color: #444;
-    }
-    .settings-section input,
-    .settings-section select {
-      width: 100%;
-      padding: 8px 10px;
-      border: 1px solid #d0d0d0;
-      border-radius: 6px;
-      font-size: 13px;
-      margin-bottom: 12px;
-    }
-    .settings-section input:focus,
-    .settings-section select:focus {
-      outline: none;
-      border-color: #0078d4;
-      box-shadow: 0 0 0 2px rgba(0,120,212,0.15);
-    }
-    .hint { font-size: 11px; color: #888; margin-top: -8px; margin-bottom: 12px; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <span style="font-size:20px">📬</span>
-    <h1>Email Triage AI</h1>
-  </div>
-
-  <div class="tab-bar">
-    <button class="tab active" data-tab="single">Tento e-mail</button>
-    <button class="tab" data-tab="inbox">Celý inbox</button>
-    <button class="tab" data-tab="settings">⚙️</button>
-  </div>
-
-  <!-- SINGLE EMAIL PANEL -->
-  <div id="panel-single" class="panel active">
-    <div class="actions">
-      <button class="btn btn-primary" id="analyzeBtn" onclick="analyzeCurrent()">
-        🔍 Analyzovat
-      </button>
-    </div>
-
-    <div id="loading" class="loading">
-      <div class="spinner"></div>
-      <p>Analyzuji e-mail...</p>
-    </div>
-
-    <div id="error" class="error-msg"></div>
-
-    <div id="result" class="result">
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Priorita & kategorie</span>
-        </div>
-        <div class="meta-row">
-          <span id="priorityBadge" class="priority-badge"></span>
-          <span id="categoryTag" class="category-tag"></span>
-          <span id="deadlineTag" class="deadline-tag"></span>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">Souhrn</span>
-        </div>
-        <p id="summaryText" class="summary-text"></p>
-      </div>
-
-      <div id="replyCard" class="card" style="display:none">
-        <div class="card-header">
-          <span class="card-title">💬 Návrh odpovědi</span>
-        </div>
-        <div class="reply-box">
-          <button class="btn-copy" onclick="copyReply()">📋 Kopírovat</button>
-          <p id="replyText"></p>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- INBOX SUMMARY PANEL -->
-  <div id="panel-inbox" class="panel">
-    <div class="actions">
-      <button class="btn btn-primary" id="inboxBtn" onclick="analyzeInbox()">
-        📊 Sumarizovat inbox
-      </button>
-      <select id="inboxCount" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px">
-        <option value="10">10 nejnovějších</option>
-        <option value="20">20 nejnovějších</option>
-        <option value="50" selected>50 nejnovějších</option>
-      </select>
-    </div>
-
-    <div id="inboxLoading" class="loading">
-      <div class="spinner"></div>
-      <p>Analyzuji inbox...</p>
-    </div>
-
-    <div id="inboxError" class="error-msg"></div>
-
-    <div id="inboxResult" class="result">
-      <ul id="inboxList" class="inbox-list"></ul>
-    </div>
-  </div>
-
-  <!-- SETTINGS PANEL -->
-  <div id="panel-settings" class="panel">
-    <div class="settings-section">
-      <label for="apiUrl">Backend URL</label>
-      <input type="url" id="apiUrl" placeholder="https://your-app.onrender.com"/>
-      <p class="hint">Adresa vašeho Python backendu s /analyze a /analyze-inbox endpointy.</p>
-
-      <label for="apiKey">API klíč (volitelný)</label>
-      <input type="password" id="apiKey" placeholder="Váš tajný klíč"/>
-      <p class="hint">Pokud backend vyžaduje autorizaci.</p>
-
-      <label for="aiModel">AI Model</label>
-      <select id="aiModel">
-        <option value="gpt-4o">GPT-4o (doporučeno)</option>
-        <option value="gpt-4o-mini">GPT-4o Mini (levnější)</option>
-        <option value="claude-sonnet">Claude Sonnet</option>
-        <option value="local">Lokální model (Ollama)</option>
-      </select>
-
-      <label for="replyLang">Jazyk odpovědí</label>
-      <select id="replyLang">
-        <option value="cs" selected>Čeština</option>
-        <option value="en">English</option>
-        <option value="auto">Podle e-mailu</option>
-      </select>
-
-      <button class="btn btn-primary" onclick="saveSettings()" style="margin-top:8px">
-        💾 Uložit nastavení
-      </button>
-    </div>
-  </div>
-
-  <script>
-    /* ── Tab switching ── */
-    document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-      });
-    });
-
-    /* ── Settings (in-memory, no localStorage) ── */
-    let settings = {
-      apiUrl: '',
-      apiKey: '',
-      aiModel: 'gpt-4o',
-      replyLang: 'cs'
-    };
-
-    function saveSettings() {
-      settings.apiUrl = document.getElementById('apiUrl').value.replace(/\/$/, '');
-      settings.apiKey = document.getElementById('apiKey').value;
-      settings.aiModel = document.getElementById('aiModel').value;
-      settings.replyLang = document.getElementById('replyLang').value;
-      alert('Nastavení uloženo (platí do zavření panelu).');
-    }
-
-    /* ── Office.js init ── */
-    Office.onReady(function(info) {
-      if (info.host === Office.HostType.Outlook) {
-        document.getElementById('analyzeBtn').disabled = false;
-      }
-    });
-
-    /* ── Analyze current email ── */
-    function analyzeCurrent() {
-      const item = Office.context.mailbox.item;
-      if (!item) {
-        showError('error', 'Není vybrán žádný e-mail.');
-        return;
-      }
-
-      show('loading');
-      hide('result');
-      hide('error');
-
-      item.body.getAsync(Office.CoercionType.Text, function(bodyResult) {
-        if (bodyResult.status !== Office.AsyncResultStatus.Succeeded) {
-          showError('error', 'Nepodařilo se přečíst tělo e-mailu.');
-          hide('loading');
-          return;
-        }
-
-        const emailData = {
-          subject: item.subject,
-          from: item.from ? item.from.displayName + ' <' + item.from.emailAddress + '>' : 'Neznámý',
-          date: item.dateTimeCreated ? item.dateTimeCreated.toISOString() : '',
-          body: bodyResult.value.substring(0, 3000),
-          model: settings.aiModel,
-          lang: settings.replyLang
-        };
-
-        callBackend('/analyze', emailData)
-          .then(renderSingleResult)
-          .catch(err => showError('error', 'Chyba: ' + err.message))
-          .finally(() => hide('loading'));
-      });
-    }
-
-    function renderSingleResult(data) {
-      const priorityLabels = {
-        'P0_urgent':        '🔴 Urgentní',
-        'P1_action_needed': '🟠 Potřeba akce',
-        'P2_informational': '🔵 Informativní',
-        'P3_ignorable':     '⚪ Nízká priorita'
-      };
-      const deadlineLabels = {
-        'dnes':        '⏰ Odpovědět dnes!',
-        'tento_tyden': '📅 Tento týden',
-        'zadny':       ''
-      };
-
-      document.getElementById('priorityBadge').textContent = priorityLabels[data.priority] || data.priority;
-      document.getElementById('priorityBadge').className = 'priority-badge priority-' + data.priority.split('_')[0];
-      document.getElementById('categoryTag').textContent = data.category;
-      document.getElementById('deadlineTag').textContent = deadlineLabels[data.reply_deadline] || '';
-      document.getElementById('summaryText').textContent = data.summary;
-
-      const replyCard = document.getElementById('replyCard');
-      if (data.needs_reply && data.suggested_reply) {
-        document.getElementById('replyText').textContent = data.suggested_reply;
-        replyCard.style.display = 'block';
-      } else {
-        replyCard.style.display = 'none';
-      }
-
-      show('result');
-    }
-
-    /* ── Analyze inbox (via Graph API from backend) ── */
-    function analyzeInbox() {
-      show('inboxLoading');
-      hide('inboxResult');
-      hide('inboxError');
-
-      // Get access token from Office.js to pass to backend
-      Office.context.mailbox.getCallbackTokenAsync({isRest: true}, function(tokenResult) {
-        if (tokenResult.status !== Office.AsyncResultStatus.Succeeded) {
-          showError('inboxError', 'Nepodařilo se získat přístupový token.');
-          hide('inboxLoading');
-          return;
-        }
-
-        const count = document.getElementById('inboxCount').value;
-        callBackend('/analyze-inbox', {
-          token: tokenResult.value,
-          restUrl: Office.context.mailbox.restUrl,
-          top: parseInt(count),
-          model: settings.aiModel,
-          lang: settings.replyLang
-        })
-          .then(renderInboxResult)
-          .catch(err => showError('inboxError', 'Chyba: ' + err.message))
-          .finally(() => hide('inboxLoading'));
-      });
-    }
-
-    function renderInboxResult(data) {
-      const list = document.getElementById('inboxList');
-      list.innerHTML = '';
-
-      const priorityIcons = {
-        'P0_urgent': '🔴',
-        'P1_action_needed': '🟠',
-        'P2_informational': '🔵',
-        'P3_ignorable': '⚪'
-      };
-
-      data.emails.forEach(email => {
-        const li = document.createElement('li');
-        li.className = 'inbox-item';
-        li.innerHTML =
-          '<span class="inbox-priority">' + (priorityIcons[email.priority] || '❓') + '</span>' +
-          '<div class="inbox-content">' +
-            '<div class="inbox-subject">' + escapeHtml(email.subject || email.summary) + '</div>' +
-            '<div class="inbox-summary-text">' + escapeHtml(email.summary) +
-              (email.needs_reply ? ' <strong>→ vyžaduje odpověď</strong>' : '') +
-            '</div>' +
-          '</div>';
-        list.appendChild(li);
-      });
-
-      show('inboxResult');
-    }
-
-    /* ── Helpers ── */
-    async function callBackend(endpoint, payload) {
-      if (!settings.apiUrl) {
-        throw new Error('Nastavte Backend URL v záložce ⚙️');
-      }
-      const headers = { 'Content-Type': 'application/json' };
-      if (settings.apiKey) {
-        headers['Authorization'] = 'Bearer ' + settings.apiKey;
-      }
-      const resp = await fetch(settings.apiUrl + endpoint, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) throw new Error('Server vrátil ' + resp.status);
-      return resp.json();
-    }
-
-    function copyReply() {
-      const text = document.getElementById('replyText').textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        const btn = document.querySelector('#replyCard .btn-copy');
-        btn.textContent = '✅ Zkopírováno';
-        setTimeout(() => btn.textContent = '📋 Kopírovat', 2000);
-      });
-    }
-
-    function show(id) { document.getElementById(id).classList.add('active'); }
-    function hide(id) { document.getElementById(id).classList.remove('active'); }
-    function showError(id, msg) {
-      const el = document.getElementById(id);
-      el.textContent = msg;
-      el.classList.add('active');
-    }
-    function escapeHtml(t) {
-      const d = document.createElement('div');
-      d.textContent = t;
-      return d.innerHTML;
-    }
-  </script>
-</body>
-</html>
+function show(x){const o=document.getElementById('out'); o.style.display='block'; o.textContent=x}
+function headers(){const h={'Content-Type':'application/json'}; if(cfg.apiKey) h['Authorization']='Bearer '+cfg.apiKey; return h}
+function analyzeCurrent(){syncFromInputs(); if(!cfg.apiUrl){show('Nejprve nastavte Backend URL v Nastavení.'); return;} const item=Office.context.mailbox.item; if(!item){show('Žádný otevřený e-mail'); return;} item.body.getAsync(Office.CoercionType.Text, async r=>{ if(r.status!==Office.AsyncResultStatus.Succeeded){show('Nelze přečíst tělo e-mailu'); return;} const payload={subject:item.subject,from:item.from?item.from.displayName+' <'+item.from.emailAddress+'>':'',date:item.dateTimeCreated?item.dateTimeCreated.toISOString():'',body:r.value,model:cfg.model,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/
+?
+|,/).map(s=>s.trim()).filter(Boolean)}; const resp=await fetch(cfg.apiUrl+'/analyze',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); show(JSON.stringify(await resp.json(),null,2)); });}
+function applyTemplate(){const t=getVal('promptTemplate'); const templates={university:'Jsi e-mailový asistent pro univerzitní prostředí. Prioritizuj zprávy od vedení, děkana, studijního oddělení, garantů předmětů a IT podpory. Vždy označ jako P0/P1 zprávy s termínem do 48 hodin, žádosti o schválení nebo provozní incidenty. Ostatní informační zprávy dej do P2 nebo P3. Napiš krátký souhrn a pokud je potřeba reakce, navrhni zdvořilou odpověď v češtině.', it:'Jsi e-mailový asistent pro IT provoz. Prioritizuj incidenty, výpadky, požadavky na přístup, bezpečnostní události a e-maily s konkrétním SLA či deadlinem. Zprávy od klíčových interních adres považuj za vysokou prioritu. Navrhni stručnou technickou odpověď.', student:'Jsi e-mailový asistent pro výuku. Prioritizuj e-maily od studentů, vyučujících a studijního oddělení, zejména pokud obsahují žádost, deadline nebo nutnost schválení. Neurgentní informační zprávy dej do nižší priority.'}; if(templates[t]){document.getElementById('customPrompt').value=templates[t]}} 
+Office.onReady(()=>{tabs(); loadFromRoaming(); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); }})
+</script></body></html>

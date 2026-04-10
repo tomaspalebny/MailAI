@@ -1,113 +1,79 @@
-"""
-Email Triage AI — Backend (Flask)
-Deploy na Render.com jako Web Service.
-
-Požadavky:
-  pip install flask flask-cors openai requests gunicorn
-
-Env proměnné na Render.com:
-  OPENAI_API_KEY=sk-...
-  API_SECRET=váš-tajný-klíč (volitelný)
-"""
-
 import os
 import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
-import requests as http_requests
+import requests
 
 app = Flask(__name__)
-CORS(app)  # Outlook add-in posílá requesty z jiné domény
+CORS(app)
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.environ.get("EINFRA_API_KEY"),
+    base_url=os.environ.get("EINFRA_BASE_URL", "https://llm.ai.e-infra.cz/v1/")
+)
+
 API_SECRET = os.environ.get("API_SECRET", "")
+DEFAULT_MODEL = os.environ.get("EINFRA_MODEL", "gpt-4o-mini")
 
-SYSTEM_PROMPT = """Jsi e-mailový asistent na české univerzitě (Masarykova univerzita).
-Analyzuj e-mail a vrať JSON objekt (ne pole, jeden objekt):
-{
-  "priority": "P0_urgent|P1_action_needed|P2_informational|P3_ignorable",
-  "category": "administrativa|výuka|IT|výzkum|osobní|spam|newsletter",
-  "summary": "1-2 věty česky, co e-mail chce a od koho",
-  "needs_reply": true/false,
-  "reply_deadline": "dnes|tento_tyden|zadny",
-  "suggested_reply": "Návrh odpovědi v požadovaném jazyce pokud needs_reply=true, jinak null"
-}
+DEFAULT_PROMPT = """Jsi e-mailový asistent. Zpracuj e-mail a vrať JSON s poli:
+priority: P0_urgent|P1_action_needed|P2_informational|P3_ignorable
+category: administrativa|výuka|IT|výzkum|osobní|spam|newsletter
+summary: krátký souhrn česky
+needs_reply: true/false
+reply_deadline: dnes|tento_tyden|zadny
+suggested_reply: návrh odpovědi nebo null
+Zohledni custom pravidla uživatele."""
 
-Pravidla pro prioritu:
-- P0: deadline dnes/zítra, žádost od vedení/děkana, urgentní IT incident
-- P1: vyžaduje akci tento týden — žádosti studentů, schvalování, úkoly
-- P2: informativní — oznámení, newslettery, info bez nutnosti akce
-- P3: spam, masové rozesílky, marketing, automatické notifikace
-
-Návrh odpovědi:
-- Formální český jazyk, pokud není řečeno jinak
-- Stručný ale zdvořilý
-- Obsahuje konkrétní reakci na obsah e-mailu"""
-
-INBOX_SYSTEM_PROMPT = """Jsi e-mailový asistent na české univerzitě.
-Dostaneš seznam e-mailů. Pro každý vrať JSON objekt.
-Vrať JSON s klíčem "emails" obsahující pole objektů:
-{
-  "emails": [
-    {
-      "id": "ID e-mailu",
-      "subject": "předmět",
-      "priority": "P0_urgent|P1_action_needed|P2_informational|P3_ignorable",
-      "category": "administrativa|výuka|IT|výzkum|osobní|spam|newsletter",
-      "summary": "1 věta česky",
-      "needs_reply": true/false,
-      "reply_deadline": "dnes|tento_tyden|zadny",
-      "suggested_reply": "Stručný návrh odpovědi nebo null"
-    }
-  ]
-}
-Řaď od nejvyšší priority (P0 nahoře). U P0 a P1 vždy navrhni odpověď."""
+INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam e-mailů a vrať JSON {"emails": [...]} se stejnými poli jako u jednoho e-mailu. Řaď od nejvyšší priority."""
 
 
 def check_auth():
-    """Volitelná autorizace přes Bearer token."""
     if not API_SECRET:
         return True
-    auth = request.headers.get("Authorization", "")
-    return auth == f"Bearer {API_SECRET}"
+    return request.headers.get("Authorization", "") == f"Bearer {API_SECRET}"
+
+
+def get_prompt(data):
+    return data.get("customPrompt") or DEFAULT_PROMPT
+
+
+def get_priority_senders(data):
+    return data.get("prioritySenders", [])
+
+
+def merge_prompt(custom_prompt, senders):
+    extra = []
+    if senders:
+        extra.append("Preferovaní odesílatelé: " + ", ".join(senders))
+    if extra:
+        return custom_prompt + "\n\n" + "\n".join(extra)
+    return custom_prompt
 
 
 @app.route("/analyze", methods=["POST"])
-def analyze_single():
+def analyze():
     if not check_auth():
         return jsonify({"error": "Unauthorized"}), 401
+    data = request.json or {}
+    prompt = get_prompt(data)
+    senders = get_priority_senders(data)
+    email = f"Od: {data.get('from','?')}
+Předmět: {data.get('subject','?')}
+Datum: {data.get('date','?')}
+Tělo:
+{data.get('body','')}
 
-    data = request.json
-    model = data.get("model", "gpt-4o")
-    lang = data.get("lang", "cs")
-
-    email_text = (
-        f"Od: {data.get('from', '?')}\n"
-        f"Předmět: {data.get('subject', '?')}\n"
-        f"Datum: {data.get('date', '?')}\n"
-        f"Tělo:\n{data.get('body', '')}"
-    )
-
-    lang_instruction = ""
-    if lang == "en":
-        lang_instruction = "\nPiš odpovědi v angličtině."
-    elif lang == "auto":
-        lang_instruction = "\nPiš odpovědi ve stejném jazyce jako je e-mail."
-
+Preferovaní odesílatelé: {', '.join(senders) if senders else 'žádní'}"
     try:
-        response = client.chat.completions.create(
-            model=_resolve_model(model),
+        resp = client.chat.completions.create(
+            model=data.get("model", DEFAULT_MODEL),
             response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + lang_instruction},
-                {"role": "user", "content": email_text}
-            ],
+            messages=[{"role":"system","content": prompt}, {"role":"user","content": email}],
             temperature=0.3,
-            max_tokens=1000
+            max_tokens=1000,
         )
-        result = json.loads(response.choices[0].message.content)
-        return jsonify(result)
+        return jsonify(json.loads(resp.choices[0].message.content))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -116,86 +82,49 @@ def analyze_single():
 def analyze_inbox():
     if not check_auth():
         return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.json
+    data = request.json or {}
     token = data.get("token")
-    rest_url = data.get("restUrl", "https://graph.microsoft.com/v1.0")
-    top = data.get("top", 20)
-    model = data.get("model", "gpt-4o")
-    lang = data.get("lang", "cs")
+    top = int(data.get("top", 20))
+    prompt = merge_prompt(data.get("customPrompt") or INBOX_PROMPT, data.get("prioritySenders") or [])
+    priority_senders = [s.lower() for s in (data.get("prioritySenders") or [])]
 
-    # Fetch emails via Graph API using the callback token from Office.js
-    # restUrl z Office.js může být outlook.office.com REST URL — převedeme na Graph
-    graph_url = "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages"
-    params = {
-        "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance",
-        "$top": top,
-        "$orderby": "receivedDateTime DESC"
-    }
+    r = requests.get(
+        "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"$select":"id,subject,from,receivedDateTime,bodyPreview,isRead,importance", "$top": top, "$orderby":"receivedDateTime DESC"},
+        timeout=20,
+    )
+    r.raise_for_status()
+    msgs = r.json().get("value", [])
 
+    items = []
+    for m in msgs:
+        ea = m.get("from", {}).get("emailAddress", {})
+        sender = f"{ea.get('name','')} <{ea.get('address','')}>".strip()
+        items.append({
+            "id": m.get("id"),
+            "subject": m.get("subject", "(bez předmětu)"),
+            "from": sender,
+            "receivedDateTime": m.get("receivedDateTime", ""),
+            "bodyPreview": m.get("bodyPreview", ""),
+            "isRead": m.get("isRead", False),
+            "importance": m.get("importance", "normal"),
+            "priorityBoost": any(s in sender.lower() for s in priority_senders),
+        })
+
+    user_text = json.dumps(items, ensure_ascii=False)
     try:
-        resp = http_requests.get(
-            graph_url,
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-            timeout=15
-        )
-        resp.raise_for_status()
-        messages = resp.json().get("value", [])
-    except Exception as e:
-        return jsonify({"error": f"Graph API chyba: {str(e)}"}), 502
-
-    # Build text for AI
-    email_texts = []
-    for msg in messages:
-        sender = "?"
-        if msg.get("from", {}).get("emailAddress"):
-            ea = msg["from"]["emailAddress"]
-            sender = f"{ea.get('name', '')} <{ea.get('address', '')}>"
-        email_texts.append(
-            f"ID: {msg['id'][:20]}\n"
-            f"Od: {sender}\n"
-            f"Předmět: {msg.get('subject', '(bez předmětu)')}\n"
-            f"Datum: {msg.get('receivedDateTime', '')}\n"
-            f"Důležitost: {msg.get('importance', 'normal')}\n"
-            f"Přečteno: {msg.get('isRead', False)}\n"
-            f"Náhled: {msg.get('bodyPreview', '')[:300]}"
-        )
-
-    combined = "\n---\n".join(email_texts)
-
-    try:
-        response = client.chat.completions.create(
-            model=_resolve_model(model),
+        resp = client.chat.completions.create(
+            model=data.get("model", DEFAULT_MODEL),
             response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": INBOX_SYSTEM_PROMPT},
-                {"role": "user", "content": combined}
-            ],
+            messages=[{"role":"system","content": prompt}, {"role":"user","content": user_text}],
             temperature=0.3,
-            max_tokens=4000
+            max_tokens=3000,
         )
-        result = json.loads(response.choices[0].message.content)
+        result = json.loads(resp.choices[0].message.content)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-def _resolve_model(model_key):
-    """Map frontend model names to API model IDs."""
-    mapping = {
-        "gpt-4o": "gpt-4o",
-        "gpt-4o-mini": "gpt-4o-mini",
-        "claude-sonnet": "gpt-4o",  # fallback — pro Claude použijte Anthropic SDK
-        "local": "gpt-4o",          # fallback — pro Ollama změňte base_url
-    }
-    return mapping.get(model_key, "gpt-4o")
-
-
-@app.route("/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "version": "1.0.0"})
-
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
