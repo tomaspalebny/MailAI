@@ -245,6 +245,50 @@ Tip:
 - Pokud používáš `API_SECRET`, neposílej backend endpointy bez autorizace veřejně.
 - Před produkčním nasazením zvaž audit logování, rate limiting a CORS policy.
 
+## Ochrana backendu přes API_SECRET
+
+### K čemu je ochrana backendu
+
+`API_SECRET` chrání backend endpointy před neautorizovaným použitím z internetu.
+
+Přínosy:
+- omezení zneužití veřejného endpointu
+- menší riziko spam requestů a přetížení
+- kontrola, kdo může volat `models`, `analyze`, `analyze-inbox`
+
+Kdy použít:
+- produkce: doporučeno zapnout
+- lokální vývoj / krátké demo: může být dočasně vypnuto
+
+### Kam přesně nahrát API_SECRET (Render)
+
+1. Otevři Render Dashboard.
+2. Vyber službu `mailai-kr2k`.
+3. Jdi do Environment -> Environment Variables.
+4. Přidej proměnnou:
+	- Key: `API_SECRET`
+	- Value: silný náhodný tajný řetězec
+5. Ulož změnu a spusť redeploy.
+
+Poznámka:
+- `API_SECRET` nikdy neukládej do repozitáře ani přímo do kódu.
+
+### Co vyplnit v pluginu
+
+1. Otevři záložku Nastavení v add-inu.
+2. Do pole Backend API key vlož stejnou hodnotu jako `API_SECRET` na Renderu.
+3. Ulož nastavení.
+
+Plugin pak automaticky přidává hlavičku:
+- `Authorization: Bearer <API_SECRET>`
+
+### Rotace tajného klíče
+
+Při podezření na únik:
+1. změň `API_SECRET` v Renderu
+2. redeploy
+3. aktualizuj Backend API key v pluginu
+
 ## Licence
 
 Interní projekt / bez explicitní open-source licence.
