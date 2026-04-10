@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Email Triage AI</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      color: #1a1a1a;
+      background: #fafafa;
+      padding: 16px;
+      line-height: 1.5;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-primary {
+      background: #0078d4;
+      color: white;
+    }
+    .btn-primary:hover { background: #106ebe; }
+    .btn-primary:disabled {
+      background: #c0c0c0;
+      cursor: not-allowed;
+    }
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #333;
+      border: 1px solid #d0d0d0;
+    }
+    .btn-secondary:hover { background: #e4e4e4; }
+    .btn-copy {
+      background: none;
+      border: 1px solid #d0d0d0;
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 4px;
+      color: #555;
+      cursor: pointer;
+    }
+    .btn-copy:hover { background: #f0f0f0; }
+
+    .actions { display: flex; gap: 8px; margin-bottom: 16px; }
+
+    /* Loading */
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 32px 16px;
+    }
+    .loading.active { display: block; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #0078d4;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading p { color: #666; font-size: 13px; }
+
+    /* Result cards */
+    .result { display: none; }
+    .result.active { display: block; }
+
+    .card {
+      background: white;
+      border: 1px solid #e8e8e8;
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .priority-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .priority-P0 { background: #fde8e8; color: #c62828; }
+    .priority-P1 { background: #fff3e0; color: #e65100; }
+    .priority-P2 { background: #e3f2fd; color: #1565c0; }
+    .priority-P3 { background: #f5f5f5; color: #757575; }
+
+    .category-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      background: #f0f0f0;
+      color: #444;
+    }
+    .meta-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .deadline-tag {
+      font-size: 12px;
+      color: #c62828;
+      font-weight: 500;
+    }
+
+    .summary-text {
+      font-size: 14px;
+      color: #222;
+      line-height: 1.6;
+    }
+
+    .reply-box {
+      background: #f8fafe;
+      border: 1px solid #d0dff0;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #1a1a1a;
+      white-space: pre-wrap;
+      position: relative;
+    }
+    .reply-box .btn-copy {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+    }
+
+    .error-msg {
+      display: none;
+      background: #fde8e8;
+      border: 1px solid #f5c6c6;
+      color: #c62828;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .error-msg.active { display: block; }
+
+    /* Inbox summary mode */
+    .inbox-list { list-style: none; }
+    .inbox-item {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 10px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .inbox-item:last-child { border-bottom: none; }
+    .inbox-priority { flex-shrink: 0; margin-top: 2px; }
+    .inbox-content { flex: 1; min-width: 0; }
+    .inbox-subject {
+      font-weight: 500;
+      font-size: 13px;
+      margin-bottom: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .inbox-summary-text {
+      font-size: 12px;
+      color: #666;
+    }
+
+    .tab-bar {
+      display: flex;
+      gap: 0;
+      margin-bottom: 16px;
+      border-bottom: 2px solid #e0e0e0;
+    }
+    .tab {
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: #666;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.15s;
+    }
+    .tab.active {
+      color: #0078d4;
+      border-bottom-color: #0078d4;
+    }
+    .tab:hover { color: #333; }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .settings-section { margin-top: 8px; }
+    .settings-section label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: #444;
+    }
+    .settings-section input,
+    .settings-section select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #d0d0d0;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .settings-section input:focus,
+    .settings-section select:focus {
+      outline: none;
+      border-color: #0078d4;
+      box-shadow: 0 0 0 2px rgba(0,120,212,0.15);
+    }
+    .hint { font-size: 11px; color: #888; margin-top: -8px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span style="font-size:20px">📬</span>
+    <h1>Email Triage AI</h1>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab active" data-tab="single">Tento e-mail</button>
+    <button class="tab" data-tab="inbox">Celý inbox</button>
+    <button class="tab" data-tab="settings">⚙️</button>
+  </div>
+
+  <!-- SINGLE EMAIL PANEL -->
+  <div id="panel-single" class="panel active">
+    <div class="actions">
+      <button class="btn btn-primary" id="analyzeBtn" onclick="analyzeCurrent()">
+        🔍 Analyzovat
+      </button>
+    </div>
+
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+      <p>Analyzuji e-mail...</p>
+    </div>
+
+    <div id="error" class="error-msg"></div>
+
+    <div id="result" class="result">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Priorita & kategorie</span>
+        </div>
+        <div class="meta-row">
+          <span id="priorityBadge" class="priority-badge"></span>
+          <span id="categoryTag" class="category-tag"></span>
+          <span id="deadlineTag" class="deadline-tag"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Souhrn</span>
+        </div>
+        <p id="summaryText" class="summary-text"></p>
+      </div>
+
+      <div id="replyCard" class="card" style="display:none">
+        <div class="card-header">
+          <span class="card-title">💬 Návrh odpovědi</span>
+        </div>
+        <div class="reply-box">
+          <button class="btn-copy" onclick="copyReply()">📋 Kopírovat</button>
+          <p id="replyText"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- INBOX SUMMARY PANEL -->
+  <div id="panel-inbox" class="panel">
+    <div class="actions">
+      <button class="btn btn-primary" id="inboxBtn" onclick="analyzeInbox()">
+        📊 Sumarizovat inbox
+      </button>
+      <select id="inboxCount" style="padding:6px 10px;border:1px solid #d0d0d0;border-radius:6px;font-size:13px">
+        <option value="10">10 nejnovějších</option>
+        <option value="20">20 nejnovějších</option>
+        <option value="50" selected>50 nejnovějších</option>
+      </select>
+    </div>
+
+    <div id="inboxLoading" class="loading">
+      <div class="spinner"></div>
+      <p>Analyzuji inbox...</p>
+    </div>
+
+    <div id="inboxError" class="error-msg"></div>
+
+    <div id="inboxResult" class="result">
+      <ul id="inboxList" class="inbox-list"></ul>
+    </div>
+  </div>
+
+  <!-- SETTINGS PANEL -->
+  <div id="panel-settings" class="panel">
+    <div class="settings-section">
+      <label for="apiUrl">Backend URL</label>
+      <input type="url" id="apiUrl" placeholder="https://your-app.onrender.com"/>
+      <p class="hint">Adresa vašeho Python backendu s /analyze a /analyze-inbox endpointy.</p>
+
+      <label for="apiKey">API klíč (volitelný)</label>
+      <input type="password" id="apiKey" placeholder="Váš tajný klíč"/>
+      <p class="hint">Pokud backend vyžaduje autorizaci.</p>
+
+      <label for="aiModel">AI Model</label>
+      <select id="aiModel">
+        <option value="gpt-4o">GPT-4o (doporučeno)</option>
+        <option value="gpt-4o-mini">GPT-4o Mini (levnější)</option>
+        <option value="claude-sonnet">Claude Sonnet</option>
+        <option value="local">Lokální model (Ollama)</option>
+      </select>
+
+      <label for="replyLang">Jazyk odpovědí</label>
+      <select id="replyLang">
+        <option value="cs" selected>Čeština</option>
+        <option value="en">English</option>
+        <option value="auto">Podle e-mailu</option>
+      </select>
+
+      <button class="btn btn-primary" onclick="saveSettings()" style="margin-top:8px">
+        💾 Uložit nastavení
+      </button>
+    </div>
+  </div>
+
+  <script>
+    /* ── Tab switching ── */
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    /* ── Settings (in-memory, no localStorage) ── */
+    let settings = {
+      apiUrl: '',
+      apiKey: '',
+      aiModel: 'gpt-4o',
+      replyLang: 'cs'
+    };
+
+    function saveSettings() {
+      settings.apiUrl = document.getElementById('apiUrl').value.replace(/\/$/, '');
+      settings.apiKey = document.getElementById('apiKey').value;
+      settings.aiModel = document.getElementById('aiModel').value;
+      settings.replyLang = document.getElementById('replyLang').value;
+      alert('Nastavení uloženo (platí do zavření panelu).');
+    }
+
+    /* ── Office.js init ── */
+    Office.onReady(function(info) {
+      if (info.host === Office.HostType.Outlook) {
+        document.getElementById('analyzeBtn').disabled = false;
+      }
+    });
+
+    /* ── Analyze current email ── */
+    function analyzeCurrent() {
+      const item = Office.context.mailbox.item;
+      if (!item) {
+        showError('error', 'Není vybrán žádný e-mail.');
+        return;
+      }
+
+      show('loading');
+      hide('result');
+      hide('error');
+
+      item.body.getAsync(Office.CoercionType.Text, function(bodyResult) {
+        if (bodyResult.status !== Office.AsyncResultStatus.Succeeded) {
+          showError('error', 'Nepodařilo se přečíst tělo e-mailu.');
+          hide('loading');
+          return;
+        }
+
+        const emailData = {
+          subject: item.subject,
+          from: item.from ? item.from.displayName + ' <' + item.from.emailAddress + '>' : 'Neznámý',
+          date: item.dateTimeCreated ? item.dateTimeCreated.toISOString() : '',
+          body: bodyResult.value.substring(0, 3000),
+          model: settings.aiModel,
+          lang: settings.replyLang
+        };
+
+        callBackend('/analyze', emailData)
+          .then(renderSingleResult)
+          .catch(err => showError('error', 'Chyba: ' + err.message))
+          .finally(() => hide('loading'));
+      });
+    }
+
+    function renderSingleResult(data) {
+      const priorityLabels = {
+        'P0_urgent':        '🔴 Urgentní',
+        'P1_action_needed': '🟠 Potřeba akce',
+        'P2_informational': '🔵 Informativní',
+        'P3_ignorable':     '⚪ Nízká priorita'
+      };
+      const deadlineLabels = {
+        'dnes':        '⏰ Odpovědět dnes!',
+        'tento_tyden': '📅 Tento týden',
+        'zadny':       ''
+      };
+
+      document.getElementById('priorityBadge').textContent = priorityLabels[data.priority] || data.priority;
+      document.getElementById('priorityBadge').className = 'priority-badge priority-' + data.priority.split('_')[0];
+      document.getElementById('categoryTag').textContent = data.category;
+      document.getElementById('deadlineTag').textContent = deadlineLabels[data.reply_deadline] || '';
+      document.getElementById('summaryText').textContent = data.summary;
+
+      const replyCard = document.getElementById('replyCard');
+      if (data.needs_reply && data.suggested_reply) {
+        document.getElementById('replyText').textContent = data.suggested_reply;
+        replyCard.style.display = 'block';
+      } else {
+        replyCard.style.display = 'none';
+      }
+
+      show('result');
+    }
+
+    /* ── Analyze inbox (via Graph API from backend) ── */
+    function analyzeInbox() {
+      show('inboxLoading');
+      hide('inboxResult');
+      hide('inboxError');
+
+      // Get access token from Office.js to pass to backend
+      Office.context.mailbox.getCallbackTokenAsync({isRest: true}, function(tokenResult) {
+        if (tokenResult.status !== Office.AsyncResultStatus.Succeeded) {
+          showError('inboxError', 'Nepodařilo se získat přístupový token.');
+          hide('inboxLoading');
+          return;
+        }
+
+        const count = document.getElementById('inboxCount').value;
+        callBackend('/analyze-inbox', {
+          token: tokenResult.value,
+          restUrl: Office.context.mailbox.restUrl,
+          top: parseInt(count),
+          model: settings.aiModel,
+          lang: settings.replyLang
+        })
+          .then(renderInboxResult)
+          .catch(err => showError('inboxError', 'Chyba: ' + err.message))
+          .finally(() => hide('inboxLoading'));
+      });
+    }
+
+    function renderInboxResult(data) {
+      const list = document.getElementById('inboxList');
+      list.innerHTML = '';
+
+      const priorityIcons = {
+        'P0_urgent': '🔴',
+        'P1_action_needed': '🟠',
+        'P2_informational': '🔵',
+        'P3_ignorable': '⚪'
+      };
+
+      data.emails.forEach(email => {
+        const li = document.createElement('li');
+        li.className = 'inbox-item';
+        li.innerHTML =
+          '<span class="inbox-priority">' + (priorityIcons[email.priority] || '❓') + '</span>' +
+          '<div class="inbox-content">' +
+            '<div class="inbox-subject">' + escapeHtml(email.subject || email.summary) + '</div>' +
+            '<div class="inbox-summary-text">' + escapeHtml(email.summary) +
+              (email.needs_reply ? ' <strong>→ vyžaduje odpověď</strong>' : '') +
+            '</div>' +
+          '</div>';
+        list.appendChild(li);
+      });
+
+      show('inboxResult');
+    }
+
+    /* ── Helpers ── */
+    async function callBackend(endpoint, payload) {
+      if (!settings.apiUrl) {
+        throw new Error('Nastavte Backend URL v záložce ⚙️');
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (settings.apiKey) {
+        headers['Authorization'] = 'Bearer ' + settings.apiKey;
+      }
+      const resp = await fetch(settings.apiUrl + endpoint, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) throw new Error('Server vrátil ' + resp.status);
+      return resp.json();
+    }
+
+    function copyReply() {
+      const text = document.getElementById('replyText').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.querySelector('#replyCard .btn-copy');
+        btn.textContent = '✅ Zkopírováno';
+        setTimeout(() => btn.textContent = '📋 Kopírovat', 2000);
+      });
+    }
+
+    function show(id) { document.getElementById(id).classList.add('active'); }
+    function hide(id) { document.getElementById(id).classList.remove('active'); }
+    function showError(id, msg) {
+      const el = document.getElementById(id);
+      el.textContent = msg;
+      el.classList.add('active');
+    }
+    function escapeHtml(t) {
+      const d = document.createElement('div');
+      d.textContent = t;
+      return d.innerHTML;
+    }
+  </script>
+</body>
+</html>

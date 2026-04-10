@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: email-triage-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn backend:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: API_SECRET
+        sync: false
