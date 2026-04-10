@@ -1,12 +1,13 @@
 import os
 import json
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from openai import OpenAI
 import requests
 
 app = Flask(__name__)
 CORS(app)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _client = None
 
@@ -64,6 +65,21 @@ def merge_prompt(custom_prompt, senders):
     if extra:
         return custom_prompt + "\n\n" + "\n".join(extra)
     return custom_prompt
+
+
+@app.route("/")
+def index():
+    return send_from_directory(BASE_DIR, "taskpane.html")
+
+
+@app.route("/taskpane.html")
+def taskpane():
+    return send_from_directory(BASE_DIR, "taskpane.html")
+
+
+@app.route("/assets/<path:filename>")
+def assets(filename):
+    return send_from_directory(os.path.join(BASE_DIR, "assets"), filename)
 
 
 @app.route("/analyze", methods=["POST"])
