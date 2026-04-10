@@ -25,6 +25,7 @@ AI asistent pro třídění, sumarizaci a návrhy odpovědí na e-maily přímo 
 2. Nahrajte `backend.py`, `requirements.txt` a `render.yaml`
 3. Nastavte env proměnné:
    - `EINFRA_API_KEY` = váš API klíč pro llm.ai.e-infra.cz
+   - `OPENAI_API_KEY` = fallback varianta (pokud nepoužijete `EINFRA_API_KEY`)
    - `EINFRA_BASE_URL` = `https://llm.ai.e-infra.cz/v1/`
    - `EINFRA_MODEL` = `gpt-4o-mini` (volitelné)
    - `API_SECRET` = libovolný tajný klíč (volitelný)

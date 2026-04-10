@@ -8,6 +8,7 @@
 ## Nastavení backendu
 Proměnné prostředí:
 - `EINFRA_API_KEY`
+- `OPENAI_API_KEY` (kompatibilní fallback, pokud nepoužijete `EINFRA_API_KEY`)
 - `EINFRA_BASE_URL=https://llm.ai.e-infra.cz/v1/`
 - `EINFRA_MODEL=gpt-4o-mini`
 - `API_SECRET` volitelně

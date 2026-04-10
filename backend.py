@@ -8,10 +8,25 @@ import requests
 app = Flask(__name__)
 CORS(app)
 
-client = OpenAI(
-    api_key=os.environ.get("EINFRA_API_KEY"),
-    base_url=os.environ.get("EINFRA_BASE_URL", "https://llm.ai.e-infra.cz/v1/")
-)
+_client = None
+
+
+def get_client():
+    global _client
+    if _client is not None:
+        return _client
+
+    api_key = os.environ.get("EINFRA_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Missing API key: set EINFRA_API_KEY (preferred) or OPENAI_API_KEY."
+        )
+
+    _client = OpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("EINFRA_BASE_URL", "https://llm.ai.e-infra.cz/v1/"),
+    )
+    return _client
 
 API_SECRET = os.environ.get("API_SECRET", "")
 DEFAULT_MODEL = os.environ.get("EINFRA_MODEL", "gpt-4o-mini")
@@ -67,6 +82,7 @@ def analyze():
         f"Preferovaní odesílatelé: {', '.join(senders) if senders else 'žádní'}"
     )
     try:
+        client = get_client()
         resp = client.chat.completions.create(
             model=data.get("model", DEFAULT_MODEL),
             response_format={"type": "json_object"},
@@ -115,6 +131,7 @@ def analyze_inbox():
 
     user_text = json.dumps(items, ensure_ascii=False)
     try:
+        client = get_client()
         resp = client.chat.completions.create(
             model=data.get("model", DEFAULT_MODEL),
             response_format={"type": "json_object"},
