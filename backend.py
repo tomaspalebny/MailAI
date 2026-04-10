@@ -56,15 +56,16 @@ def analyze():
     if not check_auth():
         return jsonify({"error": "Unauthorized"}), 401
     data = request.json or {}
-    prompt = get_prompt(data)
     senders = get_priority_senders(data)
-    email = f"Od: {data.get('from','?')}
-Předmět: {data.get('subject','?')}
-Datum: {data.get('date','?')}
-Tělo:
-{data.get('body','')}
-
-Preferovaní odesílatelé: {', '.join(senders) if senders else 'žádní'}"
+    prompt = merge_prompt(get_prompt(data), senders)
+    email = (
+        f"Od: {data.get('from', '?')}\n"
+        f"Předmět: {data.get('subject', '?')}\n"
+        f"Datum: {data.get('date', '?')}\n"
+        "Tělo:\n"
+        f"{data.get('body', '')}\n\n"
+        f"Preferovaní odesílatelé: {', '.join(senders) if senders else 'žádní'}"
+    )
     try:
         resp = client.chat.completions.create(
             model=data.get("model", DEFAULT_MODEL),

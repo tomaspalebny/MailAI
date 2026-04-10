@@ -24,7 +24,9 @@ AI asistent pro třídění, sumarizaci a návrhy odpovědí na e-maily přímo 
 1. Vytvořte nový Web Service na render.com
 2. Nahrajte `backend.py`, `requirements.txt` a `render.yaml`
 3. Nastavte env proměnné:
-   - `OPENAI_API_KEY` = váš OpenAI klíč
+   - `EINFRA_API_KEY` = váš API klíč pro llm.ai.e-infra.cz
+   - `EINFRA_BASE_URL` = `https://llm.ai.e-infra.cz/v1/`
+   - `EINFRA_MODEL` = `gpt-4o-mini` (volitelné)
    - `API_SECRET` = libovolný tajný klíč (volitelný)
 4. Start command: `gunicorn backend:app --bind 0.0.0.0:$PORT`
 5. Poznamenejte si URL (např. https://email-triage-backend.onrender.com)
@@ -63,7 +65,7 @@ Soubor `taskpane.html` musí být dostupný na HTTPS. Možnosti:
 1. Otevřete e-mail v Outlooku
 2. Na ribbonu klikněte "Analyzovat e-mail" (📬)
 3. V panelu vpravo se zobrazí priorita, souhrn a návrh odpovědi
-4. Záložka "Celý inbox" analyzuje posledních N e-mailů najednou
+4. V záložce Pravidla upravte custom prompt a preferované odesílatele
 
 ## Nastavení v add-inu
 

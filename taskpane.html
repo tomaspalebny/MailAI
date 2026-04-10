@@ -63,7 +63,7 @@ function renderAnalysis(data){
     <div><strong>Kategorie:</strong> ${data.category || ''}</div>
     <div style="margin-top:8px"><strong>Souhrn:</strong><br>${escapeHtml(data.summary || '')}</div>
     <div style="margin-top:8px"><strong>Odpověď:</strong><br>${escapeHtml(data.suggested_reply || '')}</div>
-    <div style="margin-top:10px"><button class="btn btn2" onclick="insertReply(${json.dumps('')})">Vložit odpověď do reply okna</button></div>
+    <div style="margin-top:10px"><button class="btn btn2" onclick="insertReply()">Vložit odpověď do reply okna</button></div>
   `;
   show(html, true);
   lastReplyText = data.suggested_reply || '';
@@ -87,11 +87,8 @@ function insertReply(){
   show('Váš Outlook nepodporuje přímé vložení v tomto režimu.');
 }
 
-function show(x){const o=document.getElementById('out'); o.style.display='block'; o.textContent=x}
 function headers(){const h={'Content-Type':'application/json'}; if(cfg.apiKey) h['Authorization']='Bearer '+cfg.apiKey; return h}
-function analyzeCurrent(){syncFromInputs(); if(!cfg.apiUrl){show('Nejprve nastavte Backend URL v Nastavení.'); return;} const item=Office.context.mailbox.item; if(!item){show('Žádný otevřený e-mail'); return;} item.body.getAsync(Office.CoercionType.Text, async r=>{ if(r.status!==Office.AsyncResultStatus.Succeeded){show('Nelze přečíst tělo e-mailu'); return;} const payload={subject:item.subject,from:item.from?item.from.displayName+' <'+item.from.emailAddress+'>':'',date:item.dateTimeCreated?item.dateTimeCreated.toISOString():'',body:r.value,model:cfg.model,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/
-?
-|,/).map(s=>s.trim()).filter(Boolean)}; const resp=await fetch(cfg.apiUrl+'/analyze',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); show(JSON.stringify(await resp.json(),null,2)); });}
+function analyzeCurrent(){syncFromInputs(); if(!cfg.apiUrl){show('Nejprve nastavte Backend URL v Nastavení.'); return;} const item=Office.context.mailbox.item; if(!item){show('Žádný otevřený e-mail'); return;} item.body.getAsync(Office.CoercionType.Text, async r=>{ if(r.status!==Office.AsyncResultStatus.Succeeded){show('Nelze přečíst tělo e-mailu'); return;} const payload={subject:item.subject,from:item.from?item.from.displayName+' <'+item.from.emailAddress+'>':'',date:item.dateTimeCreated?item.dateTimeCreated.toISOString():'',body:r.value,model:cfg.model,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/\r?\n|,/).map(s=>s.trim()).filter(Boolean)}; try { const resp=await fetch(cfg.apiUrl+'/analyze',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); const data=await resp.json(); if(!resp.ok){show(data.error || 'Chyba backendu.'); return;} renderAnalysis(data); } catch(e){ show('Síťová chyba: '+(e && e.message ? e.message : e)); } });}
 function applyTemplate(){const t=getVal('promptTemplate'); const templates={university:'Jsi e-mailový asistent pro univerzitní prostředí. Prioritizuj zprávy od vedení, děkana, studijního oddělení, garantů předmětů a IT podpory. Vždy označ jako P0/P1 zprávy s termínem do 48 hodin, žádosti o schválení nebo provozní incidenty. Ostatní informační zprávy dej do P2 nebo P3. Napiš krátký souhrn a pokud je potřeba reakce, navrhni zdvořilou odpověď v češtině.', it:'Jsi e-mailový asistent pro IT provoz. Prioritizuj incidenty, výpadky, požadavky na přístup, bezpečnostní události a e-maily s konkrétním SLA či deadlinem. Zprávy od klíčových interních adres považuj za vysokou prioritu. Navrhni stručnou technickou odpověď.', student:'Jsi e-mailový asistent pro výuku. Prioritizuj e-maily od studentů, vyučujících a studijního oddělení, zejména pokud obsahují žádost, deadline nebo nutnost schválení. Neurgentní informační zprávy dej do nižší priority.'}; if(templates[t]){document.getElementById('customPrompt').value=templates[t]}} 
 Office.onReady(()=>{tabs(); loadFromRoaming(); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); }})
 </script></body></html>
