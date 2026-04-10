@@ -24,11 +24,11 @@ AI asistent pro třídění, sumarizaci a návrhy odpovědí na e-maily přímo 
 1. Vytvořte nový Web Service na render.com
 2. Nahrajte `backend.py`, `requirements.txt` a `render.yaml`
 3. Nastavte env proměnné:
-   - `EINFRA_API_KEY` = váš API klíč pro llm.ai.e-infra.cz
-   - `OPENAI_API_KEY` = fallback varianta (pokud nepoužijete `EINFRA_API_KEY`)
    - `EINFRA_BASE_URL` = `https://llm.ai.e-infra.cz/v1/`
    - `EINFRA_MODEL` = `gpt-4o-mini` (volitelné)
    - `API_SECRET` = libovolný tajný klíč (volitelný)
+
+LLM API klíč se zadává až v add-inu v záložce Nastavení (pole LLM API key), není součástí backend env proměnných.
 4. Start command: `gunicorn backend:app --bind 0.0.0.0:$PORT`
 5. Poznamenejte si URL (např. https://email-triage-backend.onrender.com)
 

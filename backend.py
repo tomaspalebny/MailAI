@@ -13,25 +13,15 @@ TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9l9oQAAAAASUVORK5CYII="
 )
 
-_client = None
-
-
-def get_client():
-    global _client
-    if _client is not None:
-        return _client
-
-    api_key = os.environ.get("EINFRA_API_KEY") or os.environ.get("OPENAI_API_KEY")
+def get_client(data):
+    api_key = (data or {}).get("llmApiKey")
     if not api_key:
-        raise RuntimeError(
-            "Missing API key: set EINFRA_API_KEY (preferred) or OPENAI_API_KEY."
-        )
+        raise RuntimeError("Missing LLM API key in request (llmApiKey).")
 
-    _client = OpenAI(
+    return OpenAI(
         api_key=api_key,
-        base_url=os.environ.get("EINFRA_BASE_URL", "https://llm.ai.e-infra.cz/v1/"),
+        base_url=(data or {}).get("llmBaseUrl") or os.environ.get("EINFRA_BASE_URL", "https://llm.ai.e-infra.cz/v1/"),
     )
-    return _client
 
 API_SECRET = os.environ.get("API_SECRET", "")
 DEFAULT_MODEL = os.environ.get("EINFRA_MODEL", "gpt-4o-mini")
@@ -81,6 +71,11 @@ def taskpane():
     return send_from_directory(BASE_DIR, "taskpane.html")
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/assets/<path:filename>")
 def assets(filename):
     assets_dir = os.path.join(BASE_DIR, "assets")
@@ -95,13 +90,15 @@ def assets(filename):
     return jsonify({"error": "Asset not found"}), 404
 
 
-@app.route("/models", methods=["GET"])
+@app.route("/models", methods=["POST"])
 def models():
     if not check_auth():
         return jsonify({"error": "Unauthorized"}), 401
 
+    data = request.json or {}
+
     try:
-        client = get_client()
+        client = get_client(data)
         resp = client.models.list()
         models_list = sorted(
             [m.id for m in getattr(resp, "data", []) if getattr(m, "id", None)]
@@ -127,7 +124,7 @@ def analyze():
         f"Preferovaní odesílatelé: {', '.join(senders) if senders else 'žádní'}"
     )
     try:
-        client = get_client()
+        client = get_client(data)
         resp = client.chat.completions.create(
             model=data.get("model") or DEFAULT_MODEL,
             response_format={"type": "json_object"},
@@ -176,7 +173,7 @@ def analyze_inbox():
 
     user_text = json.dumps(items, ensure_ascii=False)
     try:
-        client = get_client()
+        client = get_client(data)
         resp = client.chat.completions.create(
             model=data.get("model") or DEFAULT_MODEL,
             response_format={"type": "json_object"},
