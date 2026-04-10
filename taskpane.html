@@ -24,6 +24,7 @@ textarea{resize:vertical}
 
 <div id="settings" class="section">
   <div class="row"><label>Backend URL</label><input id="apiUrl" placeholder="https://...render.com"></div>
+  <div class="row"><label>LLM API</label><select id="apiProvider"><option value="einfra">e-infra.cz</option><option value="custom">Vlastní OpenAI-compatible</option></select></div>
   <div class="row"><label>API key (volitelné)</label><input id="apiKey" type="password"></div>
   <div class="row"><label>Model</label><select id="model"><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option></select></div>
   <div class="row"><label>Automaticky načíst při startu</label><select id="autoload"><option value="yes">Ano</option><option value="no">Ne</option></select></div>
@@ -43,16 +44,17 @@ it@..."></textarea></div>
 
 <script>
 const ROAMING_KEYS = {
-  apiUrl:'apiUrl', apiKey:'apiKey', model:'model', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload'
+  apiUrl:'apiUrl', apiProvider:'apiProvider', apiKey:'apiKey', model:'model', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload'
 };
-let cfg = {apiUrl:'',apiKey:'',model:'gpt-4o-mini',customPrompt:'',prioritySenders:'',autoload:'yes'};
+const DEFAULT_CFG = {apiUrl:'https://mailai-kr2k.onrender.com',apiProvider:'einfra',apiKey:'',model:'gpt-4o-mini',customPrompt:'',prioritySenders:'',autoload:'yes'};
+let cfg = {...DEFAULT_CFG};
 
 function tabs(){document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById(t.dataset.tab).classList.add('active')}))}
 function setVal(id,val){document.getElementById(id).value = val ?? ''}
 function getVal(id){return document.getElementById(id).value}
 function saveToRoaming(){const rs=Office.context.roamingSettings; Object.entries(cfg).forEach(([k,v])=>rs.set(k,v)); rs.saveAsync(()=>{})}
-function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={}; Object.values(ROAMING_KEYS).forEach(k=>cfg[k]=rs.get(k)||cfg[k]||''); setVal('apiUrl',cfg.apiUrl); setVal('apiKey',cfg.apiKey); setVal('model',cfg.model||'gpt-4o-mini'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
-function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.apiKey=getVal('apiKey'); cfg.model=getVal('model'); cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload')}
+function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={...DEFAULT_CFG}; Object.values(ROAMING_KEYS).forEach(k=>{const v=rs.get(k); if(v!==undefined && v!==null && v!=='') cfg[k]=v}); setVal('apiUrl',cfg.apiUrl); setVal('apiProvider',cfg.apiProvider); setVal('apiKey',cfg.apiKey); setVal('model',cfg.model||'gpt-4o-mini'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
+function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.apiProvider=getVal('apiProvider'); cfg.apiKey=getVal('apiKey'); cfg.model=getVal('model'); cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload')}
 function saveCfg(){syncFromInputs(); saveToRoaming(); show('Uloženo do Outlooku.')}
 function saveRules(){syncFromInputs(); saveToRoaming(); show('Pravidla uložena.')}
 function loadFromSettings(){loadFromRoaming(); show('Nastavení načteno.')}

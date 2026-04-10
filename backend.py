@@ -1,6 +1,7 @@
 import os
 import json
-from flask import Flask, request, jsonify, send_from_directory
+import base64
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from openai import OpenAI
 import requests
@@ -8,6 +9,9 @@ import requests
 app = Flask(__name__)
 CORS(app)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TRANSPARENT_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9l9oQAAAAASUVORK5CYII="
+)
 
 _client = None
 
@@ -79,7 +83,16 @@ def taskpane():
 
 @app.route("/assets/<path:filename>")
 def assets(filename):
-    return send_from_directory(os.path.join(BASE_DIR, "assets"), filename)
+    assets_dir = os.path.join(BASE_DIR, "assets")
+    asset_path = os.path.join(assets_dir, filename)
+
+    if os.path.isfile(asset_path):
+        return send_from_directory(assets_dir, filename)
+
+    if filename in {"icon-64.png", "icon-128.png"}:
+        return Response(TRANSPARENT_PNG, mimetype="image/png")
+
+    return jsonify({"error": "Asset not found"}), 404
 
 
 @app.route("/analyze", methods=["POST"])
