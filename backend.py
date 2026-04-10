@@ -95,6 +95,22 @@ def assets(filename):
     return jsonify({"error": "Asset not found"}), 404
 
 
+@app.route("/models", methods=["GET"])
+def models():
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        client = get_client()
+        resp = client.models.list()
+        models_list = sorted(
+            [m.id for m in getattr(resp, "data", []) if getattr(m, "id", None)]
+        )
+        return jsonify({"models": models_list, "defaultModel": DEFAULT_MODEL})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/analyze", methods=["POST"])
 def analyze():
     if not check_auth():
@@ -113,7 +129,7 @@ def analyze():
     try:
         client = get_client()
         resp = client.chat.completions.create(
-            model=data.get("model", DEFAULT_MODEL),
+            model=data.get("model") or DEFAULT_MODEL,
             response_format={"type": "json_object"},
             messages=[{"role":"system","content": prompt}, {"role":"user","content": email}],
             temperature=0.3,
@@ -162,7 +178,7 @@ def analyze_inbox():
     try:
         client = get_client()
         resp = client.chat.completions.create(
-            model=data.get("model", DEFAULT_MODEL),
+            model=data.get("model") or DEFAULT_MODEL,
             response_format={"type": "json_object"},
             messages=[{"role":"system","content": prompt}, {"role":"user","content": user_text}],
             temperature=0.3,

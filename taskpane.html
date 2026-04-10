@@ -26,7 +26,15 @@ textarea{resize:vertical}
   <div class="row"><label>Backend URL</label><input id="apiUrl" placeholder="https://...render.com"></div>
   <div class="row"><label>LLM API</label><select id="apiProvider"><option value="einfra">e-infra.cz</option><option value="custom">Vlastní OpenAI-compatible</option></select></div>
   <div class="row"><label>API key (volitelné)</label><input id="apiKey" type="password"></div>
-  <div class="row"><label>Model</label><select id="model"><option value="gpt-4o-mini">gpt-4o-mini</option><option value="gpt-4o">gpt-4o</option></select></div>
+  <div class="row"><label>Model</label><input id="model" list="modelSuggestions" placeholder="např. model z nabídky e-infra"></div>
+  <datalist id="modelSuggestions">
+    <option value="meta-llama/Llama-3.1-8B-Instruct"></option>
+    <option value="meta-llama/Llama-3.1-70B-Instruct"></option>
+    <option value="mistralai/Mistral-7B-Instruct-v0.3"></option>
+    <option value="Qwen/Qwen2.5-7B-Instruct"></option>
+  </datalist>
+  <div class="row"><button class="btn btn2" onclick="loadModels(true)">Načíst modely</button></div>
+  <div class="small" id="modelsInfo">Modely lze načíst z backendu podle aktuální dostupnosti.</div>
   <div class="row"><label>Automaticky načíst při startu</label><select id="autoload"><option value="yes">Ano</option><option value="no">Ne</option></select></div>
   <div class="row"><button class="btn" onclick="saveCfg()">Uložit do Outlooku</button></div>
   <div class="small">Ukládá se do Outlook roaming settings, takže se nastavení přenese mezi zařízeními v rámci profilu.</div>
@@ -46,18 +54,22 @@ it@..."></textarea></div>
 const ROAMING_KEYS = {
   apiUrl:'apiUrl', apiProvider:'apiProvider', apiKey:'apiKey', model:'model', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload'
 };
-const DEFAULT_CFG = {apiUrl:'https://mailai-kr2k.onrender.com',apiProvider:'einfra',apiKey:'',model:'gpt-4o-mini',customPrompt:'',prioritySenders:'',autoload:'yes'};
+const DEFAULT_CFG = {apiUrl:'https://mailai-kr2k.onrender.com',apiProvider:'einfra',apiKey:'',model:'',customPrompt:'',prioritySenders:'',autoload:'yes'};
 let cfg = {...DEFAULT_CFG};
 
 function tabs(){document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById(t.dataset.tab).classList.add('active')}))}
 function setVal(id,val){document.getElementById(id).value = val ?? ''}
 function getVal(id){return document.getElementById(id).value}
 function saveToRoaming(){const rs=Office.context.roamingSettings; Object.entries(cfg).forEach(([k,v])=>rs.set(k,v)); rs.saveAsync(()=>{})}
-function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={...DEFAULT_CFG}; Object.values(ROAMING_KEYS).forEach(k=>{const v=rs.get(k); if(v!==undefined && v!==null && v!=='') cfg[k]=v}); setVal('apiUrl',cfg.apiUrl); setVal('apiProvider',cfg.apiProvider); setVal('apiKey',cfg.apiKey); setVal('model',cfg.model||'gpt-4o-mini'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
+function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={...DEFAULT_CFG}; Object.values(ROAMING_KEYS).forEach(k=>{const v=rs.get(k); if(v!==undefined && v!==null && v!=='') cfg[k]=v}); setVal('apiUrl',cfg.apiUrl); setVal('apiProvider',cfg.apiProvider); setVal('apiKey',cfg.apiKey); setVal('model',cfg.model||''); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
 function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.apiProvider=getVal('apiProvider'); cfg.apiKey=getVal('apiKey'); cfg.model=getVal('model'); cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload')}
 function saveCfg(){syncFromInputs(); saveToRoaming(); show('Uloženo do Outlooku.')}
 function saveRules(){syncFromInputs(); saveToRoaming(); show('Pravidla uložena.')}
-function loadFromSettings(){loadFromRoaming(); show('Nastavení načteno.')}
+function loadFromSettings(){loadFromRoaming(); loadModels(false); show('Nastavení načteno.')}
+
+function setModelsInfo(text){const el=document.getElementById('modelsInfo'); if(el) el.textContent=text}
+function setModelSuggestions(models){const dl=document.getElementById('modelSuggestions'); if(!dl) return; dl.innerHTML=''; models.forEach(m=>{const o=document.createElement('option'); o.value=m; dl.appendChild(o);})}
+async function loadModels(notify){syncFromInputs(); if(!cfg.apiUrl){setModelsInfo('Nejprve vyplňte Backend URL.'); return;} setModelsInfo('Načítám modely...'); try { const resp=await fetch(cfg.apiUrl+'/models',{method:'GET',headers:headers()}); const data=await resp.json(); if(!resp.ok){setModelsInfo('Nepodařilo se načíst modely: '+(data.error || 'chyba backendu')); if(notify) show(data.error || 'Nelze načíst modely.'); return;} const models=Array.isArray(data.models) ? data.models : []; if(models.length){setModelSuggestions(models); if(!getVal('model')) setVal('model', data.defaultModel || models[0]); setModelsInfo('Načteno modelů: '+models.length);} else {setModelsInfo('Provider nevrátil žádný model.');} } catch(e){ setModelsInfo('Síťová chyba při načítání modelů.'); if(notify) show('Síťová chyba: '+(e && e.message ? e.message : e)); }}
 
 function renderAnalysis(data){
   const html = `
@@ -92,5 +104,5 @@ function insertReply(){
 function headers(){const h={'Content-Type':'application/json'}; if(cfg.apiKey) h['Authorization']='Bearer '+cfg.apiKey; return h}
 function analyzeCurrent(){syncFromInputs(); if(!cfg.apiUrl){show('Nejprve nastavte Backend URL v Nastavení.'); return;} const item=Office.context.mailbox.item; if(!item){show('Žádný otevřený e-mail'); return;} item.body.getAsync(Office.CoercionType.Text, async r=>{ if(r.status!==Office.AsyncResultStatus.Succeeded){show('Nelze přečíst tělo e-mailu'); return;} const payload={subject:item.subject,from:item.from?item.from.displayName+' <'+item.from.emailAddress+'>':'',date:item.dateTimeCreated?item.dateTimeCreated.toISOString():'',body:r.value,model:cfg.model,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/\r?\n|,/).map(s=>s.trim()).filter(Boolean)}; try { const resp=await fetch(cfg.apiUrl+'/analyze',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); const data=await resp.json(); if(!resp.ok){show(data.error || 'Chyba backendu.'); return;} renderAnalysis(data); } catch(e){ show('Síťová chyba: '+(e && e.message ? e.message : e)); } });}
 function applyTemplate(){const t=getVal('promptTemplate'); const templates={university:'Jsi e-mailový asistent pro univerzitní prostředí. Prioritizuj zprávy od vedení, děkana, studijního oddělení, garantů předmětů a IT podpory. Vždy označ jako P0/P1 zprávy s termínem do 48 hodin, žádosti o schválení nebo provozní incidenty. Ostatní informační zprávy dej do P2 nebo P3. Napiš krátký souhrn a pokud je potřeba reakce, navrhni zdvořilou odpověď v češtině.', it:'Jsi e-mailový asistent pro IT provoz. Prioritizuj incidenty, výpadky, požadavky na přístup, bezpečnostní události a e-maily s konkrétním SLA či deadlinem. Zprávy od klíčových interních adres považuj za vysokou prioritu. Navrhni stručnou technickou odpověď.', student:'Jsi e-mailový asistent pro výuku. Prioritizuj e-maily od studentů, vyučujících a studijního oddělení, zejména pokud obsahují žádost, deadline nebo nutnost schválení. Neurgentní informační zprávy dej do nižší priority.'}; if(templates[t]){document.getElementById('customPrompt').value=templates[t]}} 
-Office.onReady(()=>{tabs(); loadFromRoaming(); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); }})
+Office.onReady(()=>{tabs(); loadFromRoaming(); loadModels(false); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); }})
 </script></body></html>

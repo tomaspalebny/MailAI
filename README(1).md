@@ -7,7 +7,7 @@ AI asistent pro třídění, sumarizaci a návrhy odpovědí na e-maily přímo 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────┐
 │  Outlook Add-in │────▶│  Python Backend   │────▶│  OpenAI API │
-│  (taskpane.html)│◀────│  (Render.com)     │◀────│  (GPT-4o)   │
+│  (taskpane.html)│◀────│  (Render.com)     │◀────│ OpenAI-like │
 │  Office.js      │     │  Flask + CORS     │     │             │
 └─────────────────┘     └──────────────────┘     └─────────────┘
                               │
@@ -73,7 +73,7 @@ Soubor `taskpane.html` musí být dostupný na HTTPS. Možnosti:
 V záložce ⚙️ nastavte:
 - **Backend URL** — adresa vašeho backendu na Render.com
 - **API klíč** — pokud jste nastavili API_SECRET
-- **AI Model** — GPT-4o (nejlepší), GPT-4o Mini (levnější)
+- **AI Model** — přesný název modelu z nabídky e-infra (nebo jiného OpenAI-compatible provideru)
 - **Jazyk odpovědí** — čeština, angličtina, nebo auto
 
 ## Náklady
