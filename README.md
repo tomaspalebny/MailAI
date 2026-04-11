@@ -170,6 +170,33 @@ Aktuálně je nastaveno na:
 
 Po změně domény uprav manifest a znovu proveď sideload add-inu.
 
+## Jak přidat add-in do Outlooku
+
+### Outlook on the web
+
+1. Otevři Outlook on the web.
+2. Klikni na `Aplikace` nebo `Získat doplňky`.
+3. Otevři správu doplňků (`My add-ins` / `Moje doplňky`).
+4. Zvol přidání vlastního doplňku ze souboru.
+5. Nahraj [manifest.xml](manifest.xml).
+6. Potvrď instalaci.
+
+### Outlook desktop
+
+1. Otevři Outlook.
+2. Přejdi do nabídky pro doplňky (`Get Add-ins` / `Získat doplňky`).
+3. Otevři `My add-ins` / `Moje doplňky`.
+4. Vyber přidání vlastního doplňku ze souboru.
+5. Nahraj [manifest.xml](manifest.xml).
+
+### Kdy je potřeba add-in nahrát znovu
+
+Manifest znovu nahraj, pokud změníš:
+- URL v [manifest.xml](manifest.xml)
+- název, ikony nebo jiné manifest metadata
+
+Pouhý redeploy backendu nebo změna obsahu [taskpane.html](taskpane.html) obvykle nevyžaduje nový upload manifestu, pokud zůstává stejná URL.
+
 ## Práce s modely
 
 V Nastavení je tlačítko Načíst modely:
@@ -186,13 +213,32 @@ Inbox souhrn potřebuje Graph Access Token s oprávněním číst poštu.
 
 1. Otevři https://developer.microsoft.com/graph/graph-explorer
 2. Přihlas se stejným Microsoft 365 účtem, který používáš v Outlooku.
-3. V levém panelu otevři Permissions a povol delegované oprávnění `Mail.Read`.
-4. Potvrď consent.
-5. Otevři Access token (v Graph Explorer UI) a zkopíruj hodnotu tokenu.
+3. Klikni vpravo nahoře na profilový avatar.
+4. Zvol `Consent to permissions`.
+5. Vyhledej `Mail.Read`.
+6. U `Mail.Read` potvrď `Consent`.
+7. Zavři dialog a v hlavní query oblasti otevři záložku `Access token`.
+8. Zkopíruj hodnotu access tokenu.
 
 Poznámka:
 - Token je časově omezený. Po expiraci je potřeba získat nový.
 - Kopíruj pouze token samotný, ne celý řetězec `Bearer ...`.
+- Záložka `Access token` je v Graph Exploreru v request/query části vedle dalších záložek jako request body nebo modify permissions.
+
+### Kde přesně token najdu
+
+Po udělení oprávnění je token dostupný přímo v Graph Exploreru:
+
+1. Zůstaň přihlášený v Graph Exploreru.
+2. V prostřední části stránky, kde se skládá request, najdi záložku `Access token`.
+3. Otevři ji.
+4. Zobrazí se OAuth access token pro aktuálně přihlášený účet.
+5. Zkopíruj celý token a vlož ho do pluginu do pole `Graph Access Token`.
+
+Pokud záložku `Access token` nevidíš:
+- spusť nejdřív libovolný Graph dotaz, například `GET /me/messages?$top=1`
+- zkontroluj, že jsi přihlášený
+- zkus obnovit stránku po consentu
 
 ### Alternativa (vlastní Azure App Registration)
 
