@@ -146,6 +146,33 @@ python backend.py
 
 Backend běží standardně na `http://localhost:5000`.
 
+## Lokální aplikace bez Outlook add-inu
+
+Pokud je ve firmě zakázané nahrávání Outlook add-inů, použij lokální aplikaci [local_app.py](local_app.py).
+
+Co umí:
+- načíst nepřečtené e-maily za posledních N dní
+- udělat AI souhrn v kategoriích urgentní / středně důležité / počká / k přeposlání / ignorovat
+- nabídnout doporučené hromadné akce (označit jako přečtené, smazat)
+
+Spuštění:
+
+```bash
+pip install -r requirements.txt
+streamlit run local_app.py
+```
+
+V aplikaci vyplň:
+1. LLM API key
+2. LLM Base URL
+3. Model
+4. Graph Access Token
+5. Počet dní zpět (typicky 10)
+
+Poznámka:
+- Pro samotné čtení inboxu stačí obvykle `Mail.Read`.
+- Pro hromadné akce (označit přečtené / smazat) je typicky potřeba `Mail.ReadWrite`.
+
 ## Deploy na Render
 
 Repo je připraven pro Render Web Service přes [render.yaml](render.yaml).
