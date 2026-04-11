@@ -421,7 +421,7 @@ def main():
         st.header("Nastavení")
         llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
         llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
-        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=180, key="llm_timeout")
+        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=600, key="llm_timeout")
         analysis_mode = st.selectbox(
             "Režim výběru e-mailů",
             options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"],
