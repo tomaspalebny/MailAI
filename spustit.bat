@@ -34,11 +34,11 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 REM ── Otevři prohlížeč za 3 sekundy ───────────────────────────────
-start "" cmd /c "timeout /t 3 >nul && start http://localhost:8501"
+start "" cmd /c "timeout /t 3 >nul && start http://127.0.0.1:8502"
 
 REM ── Spusť aplikaci ───────────────────────────────────────────────
 echo  [2/2] Spoustim aplikaci... (zavri toto okno pro ukonceni)
 echo.
-.venv\Scripts\streamlit run local_app.py --server.headless true --server.port 8501
+.venv\Scripts\streamlit run local_app.py --server.address 127.0.0.1 --server.headless true --server.port 8502
 
 pause
