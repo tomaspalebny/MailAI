@@ -212,25 +212,52 @@ def fetch_not_replied_messages(token: str, days: int, top: int) -> list[dict]:
 
 
 def summarize_unread(client: OpenAI, model: str, prompt: str, items: list[dict], days: int) -> dict:
+    prepared_items = []
+    for itm in items:
+        prepared_items.append(
+            {
+                "id": str(itm.get("id") or ""),
+                "conversationId": str(itm.get("conversationId") or ""),
+                "subject": str(itm.get("subject") or "(bez předmětu)"),
+                "from": str(itm.get("from") or "(neznámý odesílatel)"),
+                "receivedDateTime": str(itm.get("receivedDateTime") or ""),
+                "bodyPreview": str(itm.get("bodyPreview") or ""),
+                "importance": str(itm.get("importance") or "normal"),
+            }
+        )
+
     user_text = json.dumps(
         {
             "window_days": days,
-            "total_unread_fetched": len(items),
-            "emails": items,
+            "total_unread_fetched": len(prepared_items),
+            "emails": prepared_items,
         },
         ensure_ascii=False,
     )
-    resp = client.chat.completions.create(
-        model=model,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": user_text},
-        ],
-        temperature=0.2,
-        max_tokens=3500,
-    )
-    return parse_json_content(resp.choices[0].message.content)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.2,
+            max_tokens=3500,
+        )
+        return parse_json_content(resp.choices[0].message.content)
+    except Exception:
+        # Fallback for models/providers that reject response_format=json_object.
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": prompt + "\n\nVrátíš pouze validní JSON bez markdownu."},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.2,
+            max_tokens=3500,
+        )
+        return parse_json_content(resp.choices[0].message.content)
 
 
 def enforce_no_delete_policy(result: dict) -> dict:
@@ -427,7 +454,14 @@ def main():
                 "LLM timeout: provider neodpověděl včas. Zkus jiný model, ověř Base URL, nebo zvyšit timeout v nastavení."
             )
         except Exception as e:
-            st.error(f"Chyba: {e}")
+            msg = str(e)
+            if "required attributes" in msg.lower() or "požadovaných atribut" in msg.lower():
+                st.error(
+                    "Model odmítl formát vstupu/výstupu. Zkus chat model (např. gpt-4o-mini) a klikni znovu na Načíst modely."
+                )
+                st.caption(f"Detail chyby: {msg}")
+            else:
+                st.error(f"Chyba: {e}")
 
     result = st.session_state.get("inbox_result")
     if result:
