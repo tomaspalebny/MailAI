@@ -1,4 +1,5 @@
 import json
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -352,6 +353,38 @@ def graph_get_master_categories(token: str) -> set[str]:
     return {c.get("displayName", "") for c in r.json().get("value", []) if c.get("displayName")}
 
 
+def decode_jwt_claims_unverified(token: str) -> dict:
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        padding = "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload + padding)
+        return json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def graph_endpoint_status(token: str, url: str, params: dict | None = None) -> tuple[int, str]:
+    try:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=20,
+        )
+        if r.status_code < 400:
+            return r.status_code, "OK"
+        try:
+            detail = r.json().get("error", {}).get("message") or r.text[:200]
+        except Exception:
+            detail = r.text[:200]
+        return r.status_code, detail
+    except Exception as e:
+        return 0, str(e)
+
+
 def graph_create_master_category(token: str, name: str, color: str) -> None:
     r = requests.post(
         "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
@@ -374,6 +407,16 @@ def ensure_mailai_master_categories(token: str) -> None:
     for _, (name, color) in MAILAI_CATEGORY_MAP.items():
         if name not in existing:
             graph_create_master_category(token, name, color)
+
+
+def is_master_categories_forbidden(error: Exception) -> bool:
+    if not isinstance(error, requests.HTTPError):
+        return False
+    response = error.response
+    if not response:
+        return False
+    req_url = getattr(response.request, "url", "") or ""
+    return response.status_code == 403 and "masterCategories" in req_url
 
 
 def graph_assign_category(token: str, msg_id: str, category_name: str) -> None:
@@ -467,6 +510,43 @@ def main():
                 st.success(f"Načteno modelů: {len(models)}")
             except Exception as e:
                 st.error(f"Chyba načítání modelů: {e}")
+
+        if st.button("Ověřit Graph oprávnění"):
+            if not graph_token:
+                st.error("Nejdřív vlož Graph Access Token")
+            else:
+                claims = decode_jwt_claims_unverified(graph_token)
+                scp = claims.get("scp", "")
+                roles = claims.get("roles", [])
+                aud = claims.get("aud", "")
+
+                st.markdown("### Diagnostika Graph tokenu")
+                st.write(f"aud: {aud}")
+                st.write(f"scp: {scp or '(není v tokenu)'}")
+                if roles:
+                    st.write(f"roles: {roles}")
+
+                me_status, me_msg = graph_endpoint_status(
+                    graph_token,
+                    "https://graph.microsoft.com/v1.0/me",
+                    {"$select": "id,userPrincipalName"},
+                )
+                msg_status, msg_msg = graph_endpoint_status(
+                    graph_token,
+                    "https://graph.microsoft.com/v1.0/me/messages",
+                    {"$top": 1, "$select": "id"},
+                )
+                cat_status, cat_msg = graph_endpoint_status(
+                    graph_token,
+                    "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+                )
+
+                st.write(f"/me: {me_status} - {me_msg}")
+                st.write(f"/me/messages: {msg_status} - {msg_msg}")
+                st.write(f"/me/outlook/masterCategories: {cat_status} - {cat_msg}")
+                st.caption(
+                    "Pro masterCategories je potřeba MailboxSettings.ReadWrite. Po změně oprávnění vždy vygeneruj nový token."
+                )
 
         models = st.session_state.get("models", [])
         if models:
@@ -583,11 +663,20 @@ def main():
                 ok = 0
                 fail = 0
                 buckets = result.get("buckets", {})
+                categories_prepared = False
                 try:
                     ensure_mailai_master_categories(token)
+                    categories_prepared = True
                 except Exception as e:
-                    st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
-                    st.stop()
+                    if is_master_categories_forbidden(e):
+                        st.warning(
+                            "Graph token nemá oprávnění pro správu kategorií (masterCategories). "
+                            "Přidej scope MailboxSettings.ReadWrite a vygeneruj nový token. "
+                            "Pokusím se pokračovat: pokud kategorie už existují, přiřazení může fungovat."
+                        )
+                    else:
+                        st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
+                        st.stop()
 
                 for bucket_key, (category_name, _) in MAILAI_CATEGORY_MAP.items():
                     for itm in buckets.get(bucket_key, []):
@@ -603,6 +692,11 @@ def main():
                 st.success(f"Štítek přiřazen u {ok} e-mailů")
                 if fail:
                     st.warning(f"Nepodařilo se přiřadit štítek u {fail} e-mailů")
+                if not categories_prepared and ok == 0:
+                    st.info(
+                        "Kategorie pravděpodobně v mailboxu neexistují. Po přidání oprávnění "
+                        "MailboxSettings.ReadWrite je aplikace vytvoří automaticky."
+                    )
 
             if st.button("Provést doporučené označení jako přečtené"):
                 ok = 0
@@ -617,7 +711,9 @@ def main():
                 if fail:
                     st.warning(f"Nepovedlo se označit: {fail}")
 
-            st.caption("Pro hromadné akce a štítkování je obvykle potřeba Graph oprávnění Mail.ReadWrite.")
+            st.caption(
+                "Pro hromadné akce je potřeba Mail.ReadWrite. Pro vytváření Outlook kategorií je potřeba MailboxSettings.ReadWrite."
+            )
 
 
 if __name__ == "__main__":
