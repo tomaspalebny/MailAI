@@ -38,6 +38,7 @@ Pravidla:
 
 MAX_EMAILS_FOR_LLM = 120
 SETTINGS_FILE = Path(".mailai_local_settings.json")
+MAILAI_CATEGORY_PREFIX = "MailAI/"
 MAILAI_CATEGORY_MAP = {
     "urgentni": ("MailAI/Urgentni", "preset0"),
     "stredne_dulezite": ("MailAI/Stredne dulezite", "preset1"),
@@ -66,6 +67,10 @@ def build_settings_payload() -> dict:
         "llm_base_url": st.session_state.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/"),
         "llm_timeout": int(st.session_state.get("llm_timeout", 60)),
         "analysis_mode": st.session_state.get("analysis_mode", "Nepřečtené"),
+        "label_handling_mode": st.session_state.get(
+            "label_handling_mode", "Jen bez MailAI štítku + urgentní připomenutí"
+        ),
+        "urgent_reminder_hours": int(st.session_state.get("urgent_reminder_hours", 24)),
         "model": st.session_state.get("model", ""),
         "graph_token": st.session_state.get("graph_token_input", ""),
         "days": int(st.session_state.get("days", 10)),
@@ -84,6 +89,10 @@ def initialize_state_from_settings() -> None:
     st.session_state["llm_base_url"] = saved.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/")
     st.session_state["llm_timeout"] = int(saved.get("llm_timeout", 60))
     st.session_state["analysis_mode"] = saved.get("analysis_mode", "Nepřečtené")
+    st.session_state["label_handling_mode"] = saved.get(
+        "label_handling_mode", "Jen bez MailAI štítku + urgentní připomenutí"
+    )
+    st.session_state["urgent_reminder_hours"] = int(saved.get("urgent_reminder_hours", 24))
     st.session_state["model"] = saved.get("model", "")
     st.session_state["graph_token_input"] = saved.get("graph_token", "")
     st.session_state["days"] = int(saved.get("days", 10))
@@ -158,9 +167,53 @@ def _normalize_inbox_items(messages: list[dict]) -> list[dict]:
                 "receivedDateTime": m.get("receivedDateTime", ""),
                 "bodyPreview": m.get("bodyPreview", ""),
                 "importance": m.get("importance", "normal"),
+                "categories": m.get("categories", []),
             }
         )
     return items
+
+
+def _parse_graph_datetime(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def filter_items_for_analysis(items: list[dict], mode: str, urgent_reminder_hours: int) -> tuple[list[dict], dict]:
+    if mode == "Všechny (včetně již označených)":
+        return items, {"skipped_labeled": 0, "urgent_reincluded": 0}
+
+    unlabeled = []
+    labeled = []
+    for item in items:
+        categories = item.get("categories") or []
+        if any(str(cat).startswith(MAILAI_CATEGORY_PREFIX) for cat in categories):
+            labeled.append(item)
+        else:
+            unlabeled.append(item)
+
+    if mode == "Jen bez MailAI štítku":
+        return unlabeled, {"skipped_labeled": len(labeled), "urgent_reincluded": 0}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, urgent_reminder_hours))
+    urgent_reminders = []
+    for item in labeled:
+        categories = set(item.get("categories") or [])
+        if "MailAI/Urgentni" not in categories:
+            continue
+        received = _parse_graph_datetime(item.get("receivedDateTime", ""))
+        if received <= cutoff:
+            urgent_reminders.append(item)
+
+    seen_ids = {item.get("id") for item in unlabeled}
+    for item in urgent_reminders:
+        msg_id = item.get("id")
+        if msg_id and msg_id not in seen_ids:
+            unlabeled.append(item)
+            seen_ids.add(msg_id)
+
+    return unlabeled, {"skipped_labeled": len(labeled), "urgent_reincluded": len(urgent_reminders)}
 
 
 def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
@@ -169,7 +222,7 @@ def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
         token,
         "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
         {
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance",
+            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories",
             "$top": top,
             "$orderby": "receivedDateTime DESC",
             "$filter": f"isRead eq false and receivedDateTime ge {since}",
@@ -186,7 +239,7 @@ def fetch_not_replied_messages(token: str, days: int, top: int) -> list[dict]:
         token,
         "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
         {
-            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance",
+            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories",
             "$top": min(top, 200),
             "$orderby": "receivedDateTime DESC",
             "$filter": f"receivedDateTime ge {since}",
@@ -223,6 +276,7 @@ def summarize_unread(client: OpenAI, model: str, prompt: str, items: list[dict],
                 "receivedDateTime": str(itm.get("receivedDateTime") or ""),
                 "bodyPreview": str(itm.get("bodyPreview") or ""),
                 "importance": str(itm.get("importance") or "normal"),
+                "categories": [str(c) for c in (itm.get("categories") or [])],
             }
         )
 
@@ -373,6 +427,21 @@ def main():
             options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"],
             key="analysis_mode",
         )
+        label_handling_mode = st.selectbox(
+            "Práce s již označenými e-maily",
+            options=[
+                "Jen bez MailAI štítku + urgentní připomenutí",
+                "Jen bez MailAI štítku",
+                "Všechny (včetně již označených)",
+            ],
+            key="label_handling_mode",
+        )
+        urgent_reminder_hours = st.number_input(
+            "Připomenout urgentní po (hodin)",
+            min_value=1,
+            max_value=240,
+            key="urgent_reminder_hours",
+        )
         model = st.text_input("Model", key="model")
         graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
         days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
@@ -434,6 +503,24 @@ def main():
                 else:
                     items = fetch_unread_messages(graph_token, int(days), int(top))
                     st.info(f"Načteno nepřečtených e-mailů: {len(items)}")
+
+            items, filter_stats = filter_items_for_analysis(
+                items,
+                label_handling_mode,
+                int(urgent_reminder_hours),
+            )
+            if label_handling_mode != "Všechny (včetně již označených)":
+                st.info(
+                    f"Po filtraci štítků do analýzy: {len(items)} | přeskočeno již označených: {filter_stats['skipped_labeled']}"
+                )
+                if filter_stats["urgent_reincluded"]:
+                    st.info(
+                        f"Urgentní připomenutí vráceno do analýzy: {filter_stats['urgent_reincluded']}"
+                    )
+
+            if not items:
+                st.warning("Po filtraci nezbyly žádné e-maily pro analýzu.")
+                return
 
             llm_items = items[:MAX_EMAILS_FOR_LLM]
             if len(items) > MAX_EMAILS_FOR_LLM:
