@@ -155,7 +155,20 @@ Co umí:
 - udělat AI souhrn v kategoriích urgentní / středně důležité / počká / k přeposlání / ignorovat
 - nabídnout doporučené hromadné akce (označit jako přečtené, smazat)
 
-Spuštění:
+### Spuštění bez terminálu (Windows)
+
+Přiložený soubor [spustit.bat](spustit.bat) vše zvládne sám:
+
+1. Stáhni celý repozitář (tlačítko **Code → Download ZIP** na GitHubu), rozbal.
+2. Dvakrát klikni na **`spustit.bat`**.
+   - Při **prvním spuštění** automaticky nainstaluje závislosti do `.venv` (trvá ~1 min).
+   - Při každém dalším spuštění se aplikace otevře přímo v prohlížeči na `http://localhost:8501`.
+3. Pro ukončení zavři konzolové okno.
+
+> **Požadavek:** Python 3.9+ musí být nainstalovaný a při instalaci musí být zaškrtnuto „Add Python to PATH".  
+> Stažení: [python.org/downloads](https://www.python.org/downloads/)
+
+### Spuštění z terminálu
 
 ```bash
 pip install -r requirements.txt
