@@ -20,8 +20,8 @@ INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam nepřečtených e-mail
     "ignorovat": number
   },
   "buckets": {
-    "urgentni": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
-    "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
+    "urgentni": [{"id":"...","subject":"...","from":"...","reason":"...","action":"...","has_deadline":true|false,"deadline_hint":"..."}],
+    "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"...","has_deadline":true|false,"deadline_hint":"..."}],
     "pocka": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
     "k_preposlani": [{"id":"...","subject":"...","from":"...","reason":"...","forward_to":"...","action":"..."}],
         "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"oznacit_jako_prectene|ignorovat"}]
@@ -34,18 +34,30 @@ Pravidla:
 - Použij jen kategorie: urgentni, stredne_dulezite, pocka, k_preposlani, ignorovat.
 - Každý e-mail zařaď právě do jedné kategorie.
 - Nikdy nenavrhuj mazání e-mailů ani akci smazat.
+- U urgentni a stredne_dulezite: has_deadline=true pokud e-mail obsahuje konkrétní termín/datum (deadline, uzávěrka, schůzka, do kdy). deadline_hint = stručný popis termínu česky, nebo null.
 - Odpovídej česky.
 """
 
 MAX_EMAILS_FOR_LLM = 120
 SETTINGS_FILE = Path(".mailai_local_settings.json")
 MAILAI_CATEGORY_PREFIX = "MailAI/"
+# preset0=červená, preset1=oranžová, preset3=žlutá, preset7=modrá, preset12=šedá, preset6=fialová
 MAILAI_CATEGORY_MAP = {
-    "urgentni": ("MailAI/Urgentni", "preset0"),
-    "stredne_dulezite": ("MailAI/Stredne dulezite", "preset1"),
-    "pocka": ("MailAI/Pocka", "preset9"),
-    "k_preposlani": ("MailAI/K preposlani", "preset5"),
-    "ignorovat": ("MailAI/Ignorovat", "preset14"),
+    "urgentni":          ("MailAI/Urgentni",          "preset0"),
+    "stredne_dulezite": ("MailAI/Stredne dulezite",  "preset1"),
+    "pocka":            ("MailAI/Pocka",              "preset3"),
+    "k_preposlani":     ("MailAI/K preposlani",       "preset7"),
+    "ignorovat":        ("MailAI/Ignorovat",          "preset12"),
+}
+MAILAI_DEADLINE_CATEGORY = ("MailAI/S terminem", "preset6")  # fialová
+
+# Barvy pro Streamlit UI  (hex, odpovídají Outlook presetům výše)
+BUCKET_UI = {
+    "urgentni":         {"label": "Urgentní",          "color": "#e74c3c", "emoji": "🔴"},
+    "stredne_dulezite": {"label": "Středně důležité",  "color": "#e67e22", "emoji": "🟠"},
+    "pocka":            {"label": "Počká",             "color": "#d4ac0d", "emoji": "🟡"},
+    "k_preposlani":     {"label": "K přeposlání",      "color": "#2980b9", "emoji": "🔵"},
+    "ignorovat":        {"label": "Ignorovat",         "color": "#95a5a6", "emoji": "⚫"},
 }
 
 
@@ -404,7 +416,8 @@ def graph_create_master_category(token: str, name: str, color: str) -> None:
 
 def ensure_mailai_master_categories(token: str) -> None:
     existing = graph_get_master_categories(token)
-    for _, (name, color) in MAILAI_CATEGORY_MAP.items():
+    all_categories = list(MAILAI_CATEGORY_MAP.values()) + [MAILAI_DEADLINE_CATEGORY]
+    for name, color in all_categories:
         if name not in existing:
             graph_create_master_category(token, name, color)
 
@@ -443,13 +456,31 @@ def graph_assign_category(token: str, msg_id: str, category_name: str) -> None:
     patch_r.raise_for_status()
 
 
-def render_bucket(title: str, items: list[dict]):
-    st.subheader(f"{title} ({len(items)})")
+def render_bucket(bucket_key: str, items: list[dict]):
+    cfg = BUCKET_UI.get(bucket_key, {"label": bucket_key, "color": "#888", "emoji": ""})
+    label = cfg["label"]
+    color = cfg["color"]
+    emoji = cfg["emoji"]
+    count = len(items)
+    st.markdown(
+        f'<div style="border-left: 5px solid {color}; padding: 4px 12px; margin-bottom: 4px;">'
+        f'<span style="color:{color}; font-size: 1.1rem; font-weight: 700">{emoji} {label} ({count})</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
     if not items:
         st.caption("Bez položek")
         return
     for itm in items[:50]:
-        st.markdown(f"- **{itm.get('subject', '')}** | {itm.get('from', '')}")
+        deadline_badge = ""
+        if itm.get("has_deadline"):
+            hint = itm.get("deadline_hint") or "termín"
+            deadline_badge = f' <span style="background:#7d3c98;color:#fff;border-radius:4px;padding:1px 6px;font-size:0.8rem">📅 {hint}</span>'
+        st.markdown(
+            f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
+            f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}',
+            unsafe_allow_html=True,
+        )
         if itm.get("reason"):
             st.caption(itm["reason"])
 
@@ -644,11 +675,8 @@ def main():
         c5.metric("Ignorovat", counts.get("ignorovat", 0))
 
         buckets = result.get("buckets", {})
-        render_bucket("Urgentní", buckets.get("urgentni", []))
-        render_bucket("Středně důležité", buckets.get("stredne_dulezite", []))
-        render_bucket("Počká", buckets.get("pocka", []))
-        render_bucket("K přeposlání", buckets.get("k_preposlani", []))
-        render_bucket("Ignorovat", buckets.get("ignorovat", []))
+        for bkey in ("urgentni", "stredne_dulezite", "pocka", "k_preposlani", "ignorovat"):
+            render_bucket(bkey, buckets.get(bkey, []))
 
         st.markdown("### Doporučené hromadné akce")
         actions = result.get("recommended_bulk_actions", {})
@@ -678,6 +706,7 @@ def main():
                         st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
                         st.stop()
 
+                deadline_cat_name = MAILAI_DEADLINE_CATEGORY[0]
                 for bucket_key, (category_name, _) in MAILAI_CATEGORY_MAP.items():
                     for itm in buckets.get(bucket_key, []):
                         msg_id = itm.get("id")
@@ -688,6 +717,12 @@ def main():
                             ok += 1
                         except Exception:
                             fail += 1
+                        # Přiřaď navíc štítek S termínem urgentním a středně důležitým s termínem
+                        if bucket_key in ("urgentni", "stredne_dulezite") and itm.get("has_deadline"):
+                            try:
+                                graph_assign_category(token, msg_id, deadline_cat_name)
+                            except Exception:
+                                pass
 
                 st.success(f"Štítek přiřazen u {ok} e-mailů")
                 if fail:
