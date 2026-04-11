@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 import streamlit as st
@@ -37,6 +38,61 @@ Pravidla:
 """
 
 MAX_EMAILS_FOR_LLM = 120
+SETTINGS_FILE = Path(".mailai_local_settings.json")
+MAILAI_CATEGORY_MAP = {
+    "urgentni": ("MailAI/Urgentni", "preset0"),
+    "stredne_dulezite": ("MailAI/Stredne dulezite", "preset1"),
+    "pocka": ("MailAI/Pocka", "preset9"),
+    "k_preposlani": ("MailAI/K preposlani", "preset5"),
+    "ignorovat": ("MailAI/Ignorovat", "preset14"),
+}
+
+
+def load_local_settings() -> dict:
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_local_settings(settings: dict) -> None:
+    SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_settings_payload() -> dict:
+    return {
+        "llm_api_key": st.session_state.get("llm_api_key", ""),
+        "llm_base_url": st.session_state.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/"),
+        "llm_timeout": int(st.session_state.get("llm_timeout", 60)),
+        "analysis_mode": st.session_state.get("analysis_mode", "Nepřečtené"),
+        "model": st.session_state.get("model", ""),
+        "graph_token": st.session_state.get("graph_token_input", ""),
+        "days": int(st.session_state.get("days", 10)),
+        "top": int(st.session_state.get("top", 200)),
+        "custom_prompt": st.session_state.get("custom_prompt", ""),
+        "priority_senders_raw": st.session_state.get("priority_senders_raw", ""),
+        "auto_save_settings": bool(st.session_state.get("auto_save_settings", True)),
+    }
+
+
+def initialize_state_from_settings() -> None:
+    if st.session_state.get("settings_initialized"):
+        return
+    saved = load_local_settings()
+    st.session_state["llm_api_key"] = saved.get("llm_api_key", "")
+    st.session_state["llm_base_url"] = saved.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/")
+    st.session_state["llm_timeout"] = int(saved.get("llm_timeout", 60))
+    st.session_state["analysis_mode"] = saved.get("analysis_mode", "Nepřečtené")
+    st.session_state["model"] = saved.get("model", "")
+    st.session_state["graph_token_input"] = saved.get("graph_token", "")
+    st.session_state["days"] = int(saved.get("days", 10))
+    st.session_state["top"] = int(saved.get("top", 200))
+    st.session_state["custom_prompt"] = saved.get("custom_prompt", "")
+    st.session_state["priority_senders_raw"] = saved.get("priority_senders_raw", "")
+    st.session_state["auto_save_settings"] = bool(saved.get("auto_save_settings", True))
+    st.session_state["settings_initialized"] = True
 
 
 def build_client(api_key: str, base_url: str, timeout_seconds: int = 60) -> OpenAI:
@@ -200,6 +256,64 @@ def graph_delete(token: str, msg_id: str) -> None:
     r.raise_for_status()
 
 
+def graph_get_master_categories(token: str) -> set[str]:
+    r = requests.get(
+        "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    r.raise_for_status()
+    return {c.get("displayName", "") for c in r.json().get("value", []) if c.get("displayName")}
+
+
+def graph_create_master_category(token: str, name: str, color: str) -> None:
+    r = requests.post(
+        "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "displayName": name,
+            "color": color,
+        },
+        timeout=20,
+    )
+    if r.status_code not in (200, 201, 409):
+        r.raise_for_status()
+
+
+def ensure_mailai_master_categories(token: str) -> None:
+    existing = graph_get_master_categories(token)
+    for _, (name, color) in MAILAI_CATEGORY_MAP.items():
+        if name not in existing:
+            graph_create_master_category(token, name, color)
+
+
+def graph_assign_category(token: str, msg_id: str, category_name: str) -> None:
+    get_r = requests.get(
+        f"https://graph.microsoft.com/v1.0/me/messages/{msg_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"$select": "categories"},
+        timeout=20,
+    )
+    get_r.raise_for_status()
+    current_categories = get_r.json().get("categories", [])
+    if category_name in current_categories:
+        return
+
+    patch_r = requests.patch(
+        f"https://graph.microsoft.com/v1.0/me/messages/{msg_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json={"categories": current_categories + [category_name]},
+        timeout=20,
+    )
+    patch_r.raise_for_status()
+
+
 def render_bucket(title: str, items: list[dict]):
     st.subheader(f"{title} ({len(items)})")
     if not items:
@@ -215,22 +329,34 @@ def main():
     st.set_page_config(page_title="MailAI Local", layout="wide")
     st.title("MailAI Local")
     st.caption("Lokální alternativa bez Outlook add-inu")
+    initialize_state_from_settings()
 
     with st.sidebar:
         st.header("Nastavení")
-        llm_api_key = st.text_input("LLM API key", type="password")
-        llm_base_url = st.text_input("LLM Base URL", value="https://llm.ai.e-infra.cz/v1/")
-        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=180, value=60)
+        llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
+        llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
+        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=180, key="llm_timeout")
         analysis_mode = st.selectbox(
             "Režim výběru e-mailů",
-            options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"]
+            options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"],
+            key="analysis_mode",
         )
-        model = st.text_input("Model", value="")
-        graph_token = st.text_input("Graph Access Token", type="password")
-        days = st.number_input("Počet dní zpět", min_value=1, max_value=30, value=10)
-        top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, value=200)
-        custom_prompt = st.text_area("Custom prompt", value="", height=120)
-        priority_senders_raw = st.text_area("Preferovaní odesílatelé", value="", height=80)
+        model = st.text_input("Model", key="model")
+        graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
+        days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
+        top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, key="top")
+        custom_prompt = st.text_area("Custom prompt", height=120, key="custom_prompt")
+        priority_senders_raw = st.text_area("Preferovaní odesílatelé", height=80, key="priority_senders_raw")
+        auto_save_settings = st.checkbox("Automaticky ukládat nastavení lokálně", key="auto_save_settings")
+
+        col_save, col_clear = st.columns(2)
+        if col_save.button("Uložit"):
+            save_local_settings(build_settings_payload())
+            st.success("Nastavení uloženo do .mailai_local_settings.json")
+        if col_clear.button("Smazat"):
+            if SETTINGS_FILE.exists():
+                SETTINGS_FILE.unlink()
+            st.success("Lokální uložené nastavení smazáno")
 
         if st.button("Načíst modely"):
             try:
@@ -266,6 +392,9 @@ def main():
         prompt = merge_prompt(custom_prompt or INBOX_PROMPT, senders)
 
         try:
+            if auto_save_settings:
+                save_local_settings(build_settings_payload())
+
             with st.spinner("Načítám e-maily z Microsoft Graph..."):
                 if analysis_mode == "Bez odpovědi (Inbox vs Sent)":
                     items = fetch_not_replied_messages(graph_token, int(days), int(top))
@@ -324,6 +453,31 @@ def main():
 
         token = st.session_state.get("graph_token", "")
         if token:
+            if st.button("Přiřadit štítky podle AI třídění"):
+                ok = 0
+                fail = 0
+                buckets = result.get("buckets", {})
+                try:
+                    ensure_mailai_master_categories(token)
+                except Exception as e:
+                    st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
+                    st.stop()
+
+                for bucket_key, (category_name, _) in MAILAI_CATEGORY_MAP.items():
+                    for itm in buckets.get(bucket_key, []):
+                        msg_id = itm.get("id")
+                        if not msg_id:
+                            continue
+                        try:
+                            graph_assign_category(token, msg_id, category_name)
+                            ok += 1
+                        except Exception:
+                            fail += 1
+
+                st.success(f"Štítek přiřazen u {ok} e-mailů")
+                if fail:
+                    st.warning(f"Nepodařilo se přiřadit štítek u {fail} e-mailů")
+
             if st.button("Provést doporučené označení jako přečtené"):
                 ok = 0
                 fail = 0
@@ -350,7 +504,7 @@ def main():
                 if fail:
                     st.warning(f"Nepovedlo se smazat: {fail}")
 
-            st.caption("Pro hromadné akce je obvykle potřeba Graph oprávnění Mail.ReadWrite.")
+            st.caption("Pro hromadné akce a štítkování je obvykle potřeba Graph oprávnění Mail.ReadWrite.")
 
 
 if __name__ == "__main__":
