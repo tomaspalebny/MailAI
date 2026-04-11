@@ -23,17 +23,16 @@ INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam nepřečtených e-mail
     "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
     "pocka": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
     "k_preposlani": [{"id":"...","subject":"...","from":"...","reason":"...","forward_to":"...","action":"..."}],
-    "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"smazat|oznacit_jako_prectene|ignorovat"}]
+        "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"oznacit_jako_prectene|ignorovat"}]
   },
   "recommended_bulk_actions": {
-    "mark_read_ids": ["..."],
-    "delete_ids": ["..."]
+        "mark_read_ids": ["..."]
   }
 }
 Pravidla:
 - Použij jen kategorie: urgentni, stredne_dulezite, pocka, k_preposlani, ignorovat.
 - Každý e-mail zařaď právě do jedné kategorie.
-- Buď konzervativní u mazání: do delete dávej jen zjevný spam/newsletter bez akční hodnoty.
+- Nikdy nenavrhuj mazání e-mailů ani akci smazat.
 - Odpovídej česky.
 """
 
@@ -234,6 +233,21 @@ def summarize_unread(client: OpenAI, model: str, prompt: str, items: list[dict],
     return parse_json_content(resp.choices[0].message.content)
 
 
+def enforce_no_delete_policy(result: dict) -> dict:
+    actions = result.get("recommended_bulk_actions") or {}
+    actions["delete_ids"] = []
+    result["recommended_bulk_actions"] = actions
+
+    buckets = result.get("buckets") or {}
+    ignore_bucket = buckets.get("ignorovat") or []
+    for item in ignore_bucket:
+        if item.get("action") == "smazat":
+            item["action"] = "ignorovat"
+    buckets["ignorovat"] = ignore_bucket
+    result["buckets"] = buckets
+    return result
+
+
 def graph_patch_read(token: str, msg_id: str) -> None:
     r = requests.patch(
         f"https://graph.microsoft.com/v1.0/me/messages/{msg_id}",
@@ -242,15 +256,6 @@ def graph_patch_read(token: str, msg_id: str) -> None:
             "Content-Type": "application/json",
         },
         json={"isRead": True},
-        timeout=20,
-    )
-    r.raise_for_status()
-
-
-def graph_delete(token: str, msg_id: str) -> None:
-    r = requests.delete(
-        f"https://graph.microsoft.com/v1.0/me/messages/{msg_id}",
-        headers={"Authorization": f"Bearer {token}"},
         timeout=20,
     )
     r.raise_for_status()
@@ -412,6 +417,7 @@ def main():
             with st.spinner("Analyzuji přes LLM..."):
                 client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
                 result = summarize_unread(client, final_model, prompt, llm_items, int(days))
+                result = enforce_no_delete_policy(result)
 
             st.session_state["inbox_result"] = result
             st.session_state["graph_token"] = graph_token
@@ -446,10 +452,9 @@ def main():
         st.markdown("### Doporučené hromadné akce")
         actions = result.get("recommended_bulk_actions", {})
         mark_ids = actions.get("mark_read_ids", [])
-        del_ids = actions.get("delete_ids", [])
 
         st.write(f"Označit jako přečtené: {len(mark_ids)}")
-        st.write(f"Smazat: {len(del_ids)}")
+        st.write("Smazat: 0 (zakázáno politikou aplikace)")
 
         token = st.session_state.get("graph_token", "")
         if token:
@@ -490,19 +495,6 @@ def main():
                 st.success(f"Označeno jako přečtené: {ok}")
                 if fail:
                     st.warning(f"Nepovedlo se označit: {fail}")
-
-            if st.button("Provést doporučené smazání"):
-                ok = 0
-                fail = 0
-                for msg_id in del_ids:
-                    try:
-                        graph_delete(token, msg_id)
-                        ok += 1
-                    except Exception:
-                        fail += 1
-                st.success(f"Smazáno: {ok}")
-                if fail:
-                    st.warning(f"Nepovedlo se smazat: {fail}")
 
             st.caption("Pro hromadné akce a štítkování je obvykle potřeba Graph oprávnění Mail.ReadWrite.")
 

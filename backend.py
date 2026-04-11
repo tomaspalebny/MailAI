@@ -51,19 +51,33 @@ INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam nepřečtených e-mail
         "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
         "pocka": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
         "k_preposlani": [{"id":"...","subject":"...","from":"...","reason":"...","forward_to":"...","action":"..."}],
-        "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"smazat|oznacit_jako_prectene|ignorovat"}]
+        "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"oznacit_jako_prectene|ignorovat"}]
     },
     "recommended_bulk_actions": {
-        "mark_read_ids": ["..."],
-        "delete_ids": ["..."]
+        "mark_read_ids": ["..."]
     }
 }
 Pravidla:
 - Použij jen kategorie: urgentni, stredne_dulezite, pocka, k_preposlani, ignorovat.
 - Každý e-mail zařaď právě do jedné kategorie.
-- Buď konzervativní u mazání: do delete dávej jen zjevný spam/newsletter bez akční hodnoty.
+- Nikdy nenavrhuj mazání e-mailů ani akci smazat.
 - Odpovídej česky.
 """
+
+
+def enforce_no_delete_policy(result):
+    actions = result.get("recommended_bulk_actions") or {}
+    actions["delete_ids"] = []
+    result["recommended_bulk_actions"] = actions
+
+    buckets = result.get("buckets") or {}
+    ignore_bucket = buckets.get("ignorovat") or []
+    for item in ignore_bucket:
+        if item.get("action") == "smazat":
+            item["action"] = "ignorovat"
+    buckets["ignorovat"] = ignore_bucket
+    result["buckets"] = buckets
+    return result
 
 
 def check_auth():
@@ -227,6 +241,7 @@ def analyze_inbox():
             max_tokens=3000,
         )
         result = json.loads(resp.choices[0].message.content)
+        result = enforce_no_delete_policy(result)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
