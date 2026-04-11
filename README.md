@@ -182,9 +182,50 @@ V aplikaci vyplň:
 4. Graph Access Token
 5. Počet dní zpět (typicky 10)
 
+### Funkce lokální aplikace
+
+**Režimy výběru e-mailů:**
+- `Nepřečtené` — načte nepřečtené e-maily za N dní
+- `Bez odpovědi (Inbox vs Sent)` — načte e-maily z Inboxu, porovná s odeslanými a zobrazí jen konverzace bez odpovědi
+
+**Práce s již označenými e-maily:**
+- `Jen bez MailAI štítku + urgentní připomenutí` *(výchozí)* — přeskočí e-maily, které už MailAI zpracoval; urgentní vrátí do analýzy znovu po nastaveném počtu hodin
+- `Jen bez MailAI štítku` — přeskočí všechny již označené
+- `Všechny (včetně již označených)` — analyzuje vše znovu
+
+**Barevné Outlook kategorie:**
+
+Aplikace vytváří a přiřazuje tyto Outlook kategorie:
+
+| Kategorie | Barva v Outlooku | Barva v UI |
+|---|---|---|
+| `MailAI/Urgentni` | červená (preset0) | 🔴 červená |
+| `MailAI/Stredne dulezite` | oranžová (preset1) | 🟠 oranžová |
+| `MailAI/Pocka` | žlutá (preset3) | 🟡 žlutá |
+| `MailAI/K preposlani` | modrá (preset7) | 🔵 modrá |
+| `MailAI/Ignorovat` | šedá (preset12) | ⚫ šedá |
+| `MailAI/S terminem` | fialová (preset6) | 📅 fialová |
+
+`MailAI/S terminem` se přiřadí navíc k urgentním a středně důležitým e-mailům, kde LLM detekuje konkrétní termín (deadline, uzávěrka, schůzka, do kdy).
+
+**Uložení nastavení:**
+Nastavení (API key, token, model, prompt, ...) se ukládá lokálně do souboru `.mailai_local_settings.json` v kořeni projektu. Při příštím spuštění se automaticky načte — není potřeba nic zadávat znovu.
+
+- Tlačítko `Uložit` — uloží ručně
+- Tlačítko `Smazat` — vymaže uložené nastavení ze souboru
+- Checkbox `Automaticky ukládat nastavení lokálně` — uloží při každé analýze
+
+> Nastavení obsahuje citlivé údaje (API key, Graph token). Soubor `.mailai_local_settings.json` nesdílej ani neverzuj.
+
+**Diagnostika Graph tokenu:**
+V postranním panelu je tlačítko `Ověřit Graph oprávnění`. Zobrazí:
+- `scp` (scopes) z tokenu
+- status endpointů `/me`, `/me/messages`, `/me/outlook/masterCategories`
+
 Poznámka:
-- Pro samotné čtení inboxu stačí obvykle `Mail.Read`.
-- Pro hromadné akce (označit přečtené / smazat) je typicky potřeba `Mail.ReadWrite`.
+- Pro samotné čtení inboxu stačí `Mail.Read`.
+- Pro označení jako přečtené a hromadné akce je potřeba `Mail.ReadWrite`.
+- Pro vytváření Outlook kategorií je potřeba `MailboxSettings.ReadWrite`.
 
 ## Deploy na Render
 
@@ -249,16 +290,30 @@ V Nastavení je tlačítko Načíst modely:
 
 Inbox souhrn potřebuje Graph Access Token s oprávněním číst poštu.
 
+### Přehled Graph oprávnění
+
+| Scope | K čemu je potřeba |
+|---|---|
+| `Mail.Read` | čtení inboxu (analýza) |
+| `Mail.ReadWrite` | označení jako přečtené, hromadné akce, přiřazení kategorií na e-mailech |
+| `MailboxSettings.ReadWrite` | vytváření a správa Outlook kategorií (`masterCategories`) |
+
+Pro plnou funkčnost aplikace potřebuješ všechny tři scopy.
+
 ### Nejrychlejší způsob (Graph Explorer)
 
 1. Otevři https://developer.microsoft.com/graph/graph-explorer
 2. Přihlas se stejným Microsoft 365 účtem, který používáš v Outlooku.
 3. Klikni vpravo nahoře na profilový avatar.
 4. Zvol `Consent to permissions`.
-5. Vyhledej `Mail.Read`.
-6. U `Mail.Read` potvrď `Consent`.
-7. Zavři dialog a v hlavní query oblasti otevři záložku `Access token`.
-8. Zkopíruj hodnotu access tokenu.
+5. Vyhledej a potvrď consent pro každé z těchto oprávnění:
+   - `Mail.Read`
+   - `Mail.ReadWrite`
+   - `MailboxSettings.ReadWrite`
+6. Zavři dialog a v hlavní query oblasti otevři záložku `Access token`.
+7. Zkopíruj hodnotu access tokenu.
+
+> Po přidání nových oprávnění vždy vygeneruj **nový token** — starý token nová práva nemá, i když consent byl udělen.
 
 Poznámka:
 - Token je časově omezený. Po expiraci je potřeba získat nový.
@@ -279,6 +334,30 @@ Pokud záložku `Access token` nevidíš:
 - spusť nejdřív libovolný Graph dotaz, například `GET /me/messages?$top=1`
 - zkontroluj, že jsi přihlášený
 - zkus obnovit stránku po consentu
+
+### Proč jsou kategorie v Outlooku bez barvy
+
+Barva kategorie je uložena v `masterCategories` (nastavení mailboxu). Pokud aplikace nemá oprávnění `MailboxSettings.ReadWrite`, kategorie se na e-mailech zobrazí (jméno se přiřadí), ale Outlook nezná jejich barvu → zobrazí je šedě nebo bezbarvě.
+
+**Řešení A — přes aplikaci:**
+Přidej scope `MailboxSettings.ReadWrite` do tokenu (viz výše) a klikni znovu na `Přiřadit štítky podle AI třídění` — aplikace vytvoří kategorie se správnými barvami automaticky.
+
+**Řešení B — ručně v Outlook Web:**
+
+1. Otevři Outlook Web → ozubené kolo (Nastavení) → **Zobrazit všechna nastavení**.
+2. Pošta → **Kategorie**.
+3. Vytvoř tyto kategorie:
+
+| Název | Barva |
+|---|---|
+| `MailAI/Urgentni` | červená |
+| `MailAI/Stredne dulezite` | oranžová |
+| `MailAI/Pocka` | žlutá |
+| `MailAI/K preposlani` | modrá |
+| `MailAI/Ignorovat` | šedá |
+| `MailAI/S terminem` | fialová |
+
+Jakmile kategorie v `masterCategories` existují, Outlook automaticky přiřadí barvy i na e-mailech, které jsou už označeny.
 
 ### Alternativa (vlastní Azure App Registration)
 
