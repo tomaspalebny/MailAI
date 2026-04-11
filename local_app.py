@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 import streamlit as st
 from openai import OpenAI
+from openai import APITimeoutError
 
 
 INBOX_PROMPT = """Jsi e-mailový asistent. Zpracuj seznam nepřečtených e-mailů a vrať pouze validní JSON s touto strukturou:
@@ -35,9 +36,12 @@ Pravidla:
 - Odpovídej česky.
 """
 
+MAX_EMAILS_FOR_LLM = 120
 
-def build_client(api_key: str, base_url: str) -> OpenAI:
-    return OpenAI(api_key=api_key, base_url=base_url)
+
+def build_client(api_key: str, base_url: str, timeout_seconds: int = 60) -> OpenAI:
+    # Keep retries low so blocked corporate networks fail fast with a clear message.
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=1)
 
 
 def merge_prompt(custom_prompt: str, senders: list[str]) -> str:
@@ -64,28 +68,36 @@ def list_models(client: OpenAI) -> list[str]:
     return sorted([m.id for m in getattr(resp, "data", []) if getattr(m, "id", None)])
 
 
-def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    r = requests.get(
-        "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
-        headers={"Authorization": f"Bearer {token}"},
-        params={
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance",
-            "$top": top,
-            "$orderby": "receivedDateTime DESC",
-            "$filter": f"isRead eq false and receivedDateTime ge {since}",
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    msgs = r.json().get("value", [])
+def _fetch_graph_messages(token: str, endpoint: str, query: dict, max_items: int) -> list[dict]:
     items = []
-    for m in msgs:
+    url = endpoint
+    params = query.copy()
+
+    while url and len(items) < max_items:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        items.extend(data.get("value", []))
+        url = data.get("@odata.nextLink")
+        params = None
+
+    return items[:max_items]
+
+
+def _normalize_inbox_items(messages: list[dict]) -> list[dict]:
+    items = []
+    for m in messages:
         ea = m.get("from", {}).get("emailAddress", {})
         sender = f"{ea.get('name', '')} <{ea.get('address', '')}>".strip()
         items.append(
             {
                 "id": m.get("id"),
+                "conversationId": m.get("conversationId"),
                 "subject": m.get("subject", "(bez předmětu)"),
                 "from": sender,
                 "receivedDateTime": m.get("receivedDateTime", ""),
@@ -94,6 +106,54 @@ def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
             }
         )
     return items
+
+
+def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    messages = _fetch_graph_messages(
+        token,
+        "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
+        {
+            "$select": "id,subject,from,receivedDateTime,bodyPreview,isRead,importance",
+            "$top": top,
+            "$orderby": "receivedDateTime DESC",
+            "$filter": f"isRead eq false and receivedDateTime ge {since}",
+        },
+        top,
+    )
+    return _normalize_inbox_items(messages)
+
+
+def fetch_not_replied_messages(token: str, days: int, top: int) -> list[dict]:
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    inbox_messages = _fetch_graph_messages(
+        token,
+        "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
+        {
+            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance",
+            "$top": min(top, 200),
+            "$orderby": "receivedDateTime DESC",
+            "$filter": f"receivedDateTime ge {since}",
+        },
+        top,
+    )
+
+    sent_messages = _fetch_graph_messages(
+        token,
+        "https://graph.microsoft.com/v1.0/me/mailfolders/sentitems/messages",
+        {
+            "$select": "conversationId,createdDateTime",
+            "$top": min(max(top * 2, 200), 500),
+            "$orderby": "createdDateTime DESC",
+            "$filter": f"createdDateTime ge {since}",
+        },
+        max(top * 2, 200),
+    )
+
+    replied_conversations = {m.get("conversationId") for m in sent_messages if m.get("conversationId")}
+    not_replied = [m for m in inbox_messages if m.get("conversationId") not in replied_conversations]
+    return _normalize_inbox_items(not_replied[:top])
 
 
 def summarize_unread(client: OpenAI, model: str, prompt: str, items: list[dict], days: int) -> dict:
@@ -160,16 +220,21 @@ def main():
         st.header("Nastavení")
         llm_api_key = st.text_input("LLM API key", type="password")
         llm_base_url = st.text_input("LLM Base URL", value="https://llm.ai.e-infra.cz/v1/")
+        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=180, value=60)
+        analysis_mode = st.selectbox(
+            "Režim výběru e-mailů",
+            options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"]
+        )
         model = st.text_input("Model", value="")
         graph_token = st.text_input("Graph Access Token", type="password")
         days = st.number_input("Počet dní zpět", min_value=1, max_value=30, value=10)
-        top = st.number_input("Max počet e-mailů", min_value=10, max_value=500, value=200)
+        top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, value=200)
         custom_prompt = st.text_area("Custom prompt", value="", height=120)
         priority_senders_raw = st.text_area("Preferovaní odesílatelé", value="", height=80)
 
         if st.button("Načíst modely"):
             try:
-                client = build_client(llm_api_key, llm_base_url)
+                client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
                 models = list_models(client)
                 st.session_state["models"] = models
                 st.success(f"Načteno modelů: {len(models)}")
@@ -202,16 +267,30 @@ def main():
 
         try:
             with st.spinner("Načítám e-maily z Microsoft Graph..."):
-                items = fetch_unread_messages(graph_token, int(days), int(top))
-            st.info(f"Načteno nepřečtených e-mailů: {len(items)}")
+                if analysis_mode == "Bez odpovědi (Inbox vs Sent)":
+                    items = fetch_not_replied_messages(graph_token, int(days), int(top))
+                    st.info(f"Načteno e-mailů bez odpovědi: {len(items)}")
+                else:
+                    items = fetch_unread_messages(graph_token, int(days), int(top))
+                    st.info(f"Načteno nepřečtených e-mailů: {len(items)}")
+
+            llm_items = items[:MAX_EMAILS_FOR_LLM]
+            if len(items) > MAX_EMAILS_FOR_LLM:
+                st.warning(
+                    f"Pro LLM analýzu používám prvních {MAX_EMAILS_FOR_LLM} e-mailů z {len(items)} kvůli rychlosti a stabilitě."
+                )
 
             with st.spinner("Analyzuji přes LLM..."):
-                client = build_client(llm_api_key, llm_base_url)
-                result = summarize_unread(client, final_model, prompt, items, int(days))
+                client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
+                result = summarize_unread(client, final_model, prompt, llm_items, int(days))
 
             st.session_state["inbox_result"] = result
             st.session_state["graph_token"] = graph_token
             st.success("Souhrn hotový")
+        except APITimeoutError:
+            st.error(
+                "LLM timeout: provider neodpověděl včas. Zkus jiný model, ověř Base URL, nebo zvyšit timeout v nastavení."
+            )
         except Exception as e:
             st.error(f"Chyba: {e}")
 
