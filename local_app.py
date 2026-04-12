@@ -151,13 +151,17 @@ def build_client(api_key: str, base_url: str, timeout_seconds: int = 60) -> Open
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds, max_retries=1)
 
 
-def merge_prompt(custom_prompt: str, senders: list[str]) -> str:
-    extra = []
+def merge_prompt(base_prompt: str, custom_prompt: str, senders: list[str]) -> str:
+    parts = [base_prompt.strip()]
+
+    custom_prompt = (custom_prompt or "").strip()
+    if custom_prompt:
+        parts.append("Doplňující instrukce uživatele:\n" + custom_prompt)
+
     if senders:
-        extra.append("Preferovaní odesílatelé: " + ", ".join(senders))
-    if extra:
-        return custom_prompt + "\n\n" + "\n".join(extra)
-    return custom_prompt
+        parts.append("Preferovaní odesílatelé: " + ", ".join(senders))
+
+    return "\n\n".join(parts)
 
 
 def parse_json_content(content: str) -> dict:
@@ -824,7 +828,12 @@ def main():
         calendar_timezone = st.text_input("Časová zóna kalendáře", key="calendar_timezone")
         days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
         top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, key="top")
-        custom_prompt = st.text_area("Custom prompt", height=120, key="custom_prompt")
+        custom_prompt = st.text_area(
+            "Custom prompt",
+            height=120,
+            key="custom_prompt",
+            help="Přidá se k výchozím instrukcím pro analýzu, nenahrazuje je.",
+        )
         priority_senders_raw = st.text_area("Preferovaní odesílatelé", height=80, key="priority_senders_raw")
         auto_save_settings = st.checkbox("Automaticky ukládat nastavení lokálně", key="auto_save_settings")
 
@@ -1002,7 +1011,7 @@ def main():
             return
 
         senders = [s.strip() for s in priority_senders_raw.replace(",", "\n").split("\n") if s.strip()]
-        prompt = merge_prompt(custom_prompt or INBOX_PROMPT, senders)
+        prompt = merge_prompt(INBOX_PROMPT, custom_prompt, senders)
 
         try:
             if auto_save_settings:
