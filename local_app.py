@@ -490,9 +490,14 @@ def get_bucket_overrides(result: dict) -> dict[str, str]:
 
 def build_effective_buckets(result: dict, overrides: dict[str, str]) -> dict[str, list[dict]]:
     effective = {bucket_key: [] for bucket_key in BUCKET_ORDER}
+    seen_ids = set()
     for source_bucket in BUCKET_ORDER:
         for itm in (result.get("buckets") or {}).get(source_bucket, []):
             msg_id = str(itm.get("id") or "")
+            if msg_id:
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
             target_bucket = overrides.get(msg_id, source_bucket)
             if target_bucket not in effective:
                 target_bucket = source_bucket
@@ -509,6 +514,8 @@ def render_bucket_override_editor(result: dict) -> None:
     st.caption("Před přiřazením Outlook kategorií můžeš u jednotlivých e-mailů změnit cílovou kategorii.")
 
     buckets = result.get("buckets") or {}
+    rendered_ids = set()
+    skipped_duplicates = 0
     for bucket_key in BUCKET_ORDER:
         items = buckets.get(bucket_key, [])
         if not items:
@@ -519,6 +526,10 @@ def render_bucket_override_editor(result: dict) -> None:
             msg_id = str(itm.get("id") or "")
             if not msg_id:
                 continue
+            if msg_id in rendered_ids:
+                skipped_duplicates += 1
+                continue
+            rendered_ids.add(msg_id)
 
             col_info, col_choice = st.columns([5, 2])
             with col_info:
@@ -538,6 +549,11 @@ def render_bucket_override_editor(result: dict) -> None:
                     key=f"bucket_override_{msg_id}",
                     label_visibility="collapsed",
                 )
+
+    if skipped_duplicates:
+        st.caption(
+            f"AI vrátila duplicitní položky ({skipped_duplicates}x), byly skryty, aby bylo možné štítky bezpečně upravit."
+        )
 
 
 def render_bucket(bucket_key: str, items: list[dict]):
