@@ -199,6 +199,12 @@ V aplikaci vyplň:
 
 Po AI analýze můžeš v lokální aplikaci u každého e-mailu ručně změnit navržený štítek ještě předtím, než se kategorie zapíšou do Outlooku.
 
+Navíc můžeš nastavit, jaké Outlook štítky se mají použít pro jednotlivé AI kategorie:
+- použít už existující Outlook štítky (načtené z mailboxu)
+- nebo zadat vlastní názvy štítků
+
+Mapování se nastavuje v postranním panelu v sekci **Štítky pro AI kategorie** a ukládá se do lokálního nastavení.
+
 Aplikace vytváří a přiřazuje tyto Outlook kategorie:
 
 | Kategorie | Barva v Outlooku | Barva v UI |
@@ -211,6 +217,8 @@ Aplikace vytváří a přiřazuje tyto Outlook kategorie:
 | `MailAI/S terminem` | fialová (preset6) | 📅 fialová |
 
 `MailAI/S terminem` se přiřadí navíc k urgentním a středně důležitým e-mailům, kde LLM detekuje konkrétní termín (deadline, uzávěrka, schůzka, do kdy).
+
+Pokud nechceš používat `MailAI/S terminem`, můžeš v nastavení vypnout přidávání doplňkového termínového štítku nebo zvolit vlastní název.
 
 **Vložení termínu do kalendáře:**
 
@@ -240,6 +248,8 @@ V postranním panelu je tlačítko `Ověřit Graph oprávnění`. Zobrazí:
 - status endpointů `/me`, `/me/messages`, `/me/outlook/masterCategories`
 
 Pro kalendář navíc kontroluje i endpoint `/me/events`.
+
+Tlačítko `Načíst Outlook štítky` načte aktuální uživatelské kategorie z endpointu `/me/outlook/masterCategories` pro pohodlný výběr do mapování.
 
 Poznámka:
 - Pro samotné čtení inboxu stačí `Mail.Read`.

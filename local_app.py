@@ -63,6 +63,22 @@ BUCKET_UI = {
 BUCKET_ORDER = tuple(BUCKET_UI.keys())
 
 
+def default_bucket_label_map() -> dict[str, str]:
+    return {bucket_key: MAILAI_CATEGORY_MAP[bucket_key][0] for bucket_key in BUCKET_ORDER}
+
+
+def normalize_bucket_label_map(raw_map: dict | None) -> dict[str, str]:
+    normalized = default_bucket_label_map()
+    if not isinstance(raw_map, dict):
+        return normalized
+
+    for bucket_key in BUCKET_ORDER:
+        value = str(raw_map.get(bucket_key, "") or "").strip()
+        if value:
+            normalized[bucket_key] = value
+    return normalized
+
+
 def load_local_settings() -> dict:
     if not SETTINGS_FILE.exists():
         return {}
@@ -93,6 +109,10 @@ def build_settings_payload() -> dict:
         "custom_prompt": st.session_state.get("custom_prompt", ""),
         "priority_senders_raw": st.session_state.get("priority_senders_raw", ""),
         "calendar_timezone": st.session_state.get("calendar_timezone", "Europe/Prague"),
+        "use_custom_label_mapping": bool(st.session_state.get("use_custom_label_mapping", False)),
+        "bucket_label_map": normalize_bucket_label_map(st.session_state.get("bucket_label_map")),
+        "add_deadline_label": bool(st.session_state.get("add_deadline_label", True)),
+        "deadline_label_name": st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]),
         "auto_save_settings": bool(st.session_state.get("auto_save_settings", True)),
     }
 
@@ -116,6 +136,10 @@ def initialize_state_from_settings() -> None:
     st.session_state["custom_prompt"] = saved.get("custom_prompt", "")
     st.session_state["priority_senders_raw"] = saved.get("priority_senders_raw", "")
     st.session_state["calendar_timezone"] = saved.get("calendar_timezone", "Europe/Prague")
+    st.session_state["use_custom_label_mapping"] = bool(saved.get("use_custom_label_mapping", False))
+    st.session_state["bucket_label_map"] = normalize_bucket_label_map(saved.get("bucket_label_map"))
+    st.session_state["add_deadline_label"] = bool(saved.get("add_deadline_label", True))
+    st.session_state["deadline_label_name"] = str(saved.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
     st.session_state["auto_save_settings"] = bool(saved.get("auto_save_settings", True))
     st.session_state["settings_initialized"] = True
 
@@ -464,6 +488,27 @@ def ensure_mailai_master_categories(token: str) -> None:
             graph_create_master_category(token, name, color)
 
 
+def ensure_selected_master_categories(
+    token: str,
+    bucket_label_map: dict[str, str],
+    add_deadline_label: bool,
+    deadline_label_name: str,
+) -> None:
+    existing = graph_get_master_categories(token)
+    for bucket_key in BUCKET_ORDER:
+        label_name = str(bucket_label_map.get(bucket_key, "") or "").strip()
+        if not label_name:
+            continue
+        color = MAILAI_CATEGORY_MAP[bucket_key][1]
+        if label_name not in existing:
+            graph_create_master_category(token, label_name, color)
+            existing.add(label_name)
+
+    deadline_label_name = (deadline_label_name or "").strip()
+    if add_deadline_label and deadline_label_name and deadline_label_name not in existing:
+        graph_create_master_category(token, deadline_label_name, MAILAI_DEADLINE_CATEGORY[1])
+
+
 def is_master_categories_forbidden(error: Exception) -> bool:
     if not isinstance(error, requests.HTTPError):
         return False
@@ -770,6 +815,81 @@ def main():
                     "Po změně oprávnění vždy vygeneruj nový token."
                 )
 
+        st.markdown("### Štítky pro AI kategorie")
+        use_custom_label_mapping = st.checkbox(
+            "Použít vlastní mapování štítků",
+            key="use_custom_label_mapping",
+            help="Když je vypnuto, použijí se původní MailAI štítky.",
+        )
+        if use_custom_label_mapping:
+            if st.button("Načíst Outlook štítky"):
+                if not graph_token:
+                    st.error("Nejdřív vlož Graph Access Token")
+                else:
+                    try:
+                        st.session_state["outlook_categories"] = sorted(graph_get_master_categories(graph_token))
+                        st.success(f"Načteno Outlook štítků: {len(st.session_state['outlook_categories'])}")
+                    except Exception as e:
+                        st.error(f"Nepodařilo se načíst Outlook štítky: {e}")
+
+            st.caption("Můžeš použít existující Outlook štítky nebo zadat vlastní názvy.")
+            existing_labels = st.session_state.get("outlook_categories", [])
+            saved_map = normalize_bucket_label_map(st.session_state.get("bucket_label_map"))
+            updated_map = {}
+
+            for bucket_key in BUCKET_ORDER:
+                display_name = BUCKET_UI[bucket_key]["label"]
+                current_label = saved_map[bucket_key]
+                options = ["(Vlastní štítek)"] + existing_labels if existing_labels else ["(Vlastní štítek)"]
+                default_choice = current_label if current_label in existing_labels else "(Vlastní štítek)"
+                selected_choice = st.selectbox(
+                    display_name,
+                    options=options,
+                    index=options.index(default_choice),
+                    key=f"bucket_label_choice_{bucket_key}",
+                )
+
+                if selected_choice == "(Vlastní štítek)":
+                    custom_default = current_label
+                    custom_label = st.text_input(
+                        "Vlastní název",
+                        value=custom_default,
+                        key=f"bucket_label_custom_{bucket_key}",
+                        label_visibility="collapsed",
+                    )
+                    updated_map[bucket_key] = custom_label.strip()
+                else:
+                    updated_map[bucket_key] = selected_choice
+
+            st.session_state["bucket_label_map"] = normalize_bucket_label_map(updated_map)
+
+            add_deadline_label = st.checkbox(
+                "Přidávat doplňkový štítek pro termín",
+                key="add_deadline_label",
+            )
+            if add_deadline_label:
+                current_deadline_label = str(st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
+                deadline_options = ["(Vlastní štítek)"] + existing_labels if existing_labels else ["(Vlastní štítek)"]
+                deadline_default_choice = (
+                    current_deadline_label if current_deadline_label in existing_labels else "(Vlastní štítek)"
+                )
+                deadline_selected_choice = st.selectbox(
+                    "Štítek pro termín",
+                    options=deadline_options,
+                    index=deadline_options.index(deadline_default_choice),
+                    key="deadline_label_choice",
+                )
+                if deadline_selected_choice == "(Vlastní štítek)":
+                    st.session_state["deadline_label_name"] = st.text_input(
+                        "Vlastní název termínového štítku",
+                        value=current_deadline_label,
+                        key="deadline_label_custom",
+                    ).strip()
+                else:
+                    st.session_state["deadline_label_name"] = deadline_selected_choice
+        else:
+            st.caption("Výchozí režim: používají se původní MailAI štítky.")
+
         models = st.session_state.get("models", [])
         current_model = st.session_state.get("model", "")
         if models:
@@ -870,6 +990,7 @@ def main():
 
     result = st.session_state.get("inbox_result")
     if result:
+        token = st.session_state.get("graph_token", "")
         bucket_overrides = get_bucket_overrides(result)
         effective_buckets = build_effective_buckets(result, bucket_overrides)
         effective_counts = {bucket_key: len(effective_buckets[bucket_key]) for bucket_key in BUCKET_ORDER}
@@ -971,15 +1092,32 @@ def main():
 
         st.write(f"Označit jako přečtené: {len(mark_ids)}")
         st.write("Smazat: 0 (zakázáno politikou aplikace)")
-
-        token = st.session_state.get("graph_token", "")
         if token:
             if st.button("Přiřadit štítky podle aktuálního rozdělení"):
                 ok = 0
                 fail = 0
                 categories_prepared = False
+                use_custom_label_mapping = bool(st.session_state.get("use_custom_label_mapping", False))
+                if use_custom_label_mapping:
+                    selected_bucket_labels = normalize_bucket_label_map(st.session_state.get("bucket_label_map"))
+                    add_deadline_label = bool(st.session_state.get("add_deadline_label", True))
+                    deadline_cat_name = str(
+                        st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0])
+                    ).strip()
+                else:
+                    selected_bucket_labels = default_bucket_label_map()
+                    add_deadline_label = True
+                    deadline_cat_name = MAILAI_DEADLINE_CATEGORY[0]
                 try:
-                    ensure_mailai_master_categories(token)
+                    if use_custom_label_mapping:
+                        ensure_selected_master_categories(
+                            token,
+                            selected_bucket_labels,
+                            add_deadline_label,
+                            deadline_cat_name,
+                        )
+                    else:
+                        ensure_mailai_master_categories(token)
                     categories_prepared = True
                 except Exception as e:
                     if is_master_categories_forbidden(e):
@@ -992,8 +1130,10 @@ def main():
                         st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
                         st.stop()
 
-                deadline_cat_name = MAILAI_DEADLINE_CATEGORY[0]
-                for bucket_key, (category_name, _) in MAILAI_CATEGORY_MAP.items():
+                for bucket_key in BUCKET_ORDER:
+                    category_name = selected_bucket_labels.get(bucket_key, "").strip()
+                    if not category_name:
+                        continue
                     for itm in effective_buckets.get(bucket_key, []):
                         msg_id = itm.get("id")
                         if not msg_id:
@@ -1004,7 +1144,12 @@ def main():
                         except Exception:
                             fail += 1
                         # Přiřaď navíc štítek S termínem urgentním a středně důležitým s termínem
-                        if bucket_key in ("urgentni", "stredne_dulezite") and itm.get("has_deadline"):
+                        if (
+                            add_deadline_label
+                            and deadline_cat_name
+                            and bucket_key in ("urgentni", "stredne_dulezite")
+                            and itm.get("has_deadline")
+                        ):
                             try:
                                 graph_assign_category(token, msg_id, deadline_cat_name)
                             except Exception:
