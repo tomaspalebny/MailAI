@@ -195,6 +195,8 @@ V aplikaci vyplň:
 
 **Barevné Outlook kategorie:**
 
+Po AI analýze můžeš v lokální aplikaci u každého e-mailu ručně změnit navržený štítek ještě předtím, než se kategorie zapíšou do Outlooku.
+
 Aplikace vytváří a přiřazuje tyto Outlook kategorie:
 
 | Kategorie | Barva v Outlooku | Barva v UI |
