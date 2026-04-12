@@ -1,5 +1,6 @@
 import json
 import base64
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -623,6 +624,51 @@ def get_deadline_items(effective_buckets: dict[str, list[dict]]) -> list[dict]:
     return deadline_items
 
 
+def parse_deadline_date_hint(hint: str | None) -> datetime | None:
+    text = (hint or "").strip().lower()
+    if not text:
+        return None
+
+    now_local = datetime.now().astimezone()
+
+    # Relative Czech hints.
+    if "dnes" in text:
+        return now_local
+    if "zítra" in text or "zitra" in text:
+        return now_local + timedelta(days=1)
+    if "pozítří" in text or "pozitri" in text:
+        return now_local + timedelta(days=2)
+
+    # Common Czech date formats: 12. 4. 2026, 12.04.2026, 12/04/2026, 12-04-2026
+    m = re.search(r"\b(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{2,4})\b", text)
+    if m:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = int(m.group(3))
+        if year < 100:
+            year += 2000
+        try:
+            return now_local.replace(year=year, month=month, day=day)
+        except ValueError:
+            pass
+
+    # Day+month without year (assume current year, otherwise next year if already passed).
+    m = re.search(r"\b(\d{1,2})\s*[./-]\s*(\d{1,2})(?:\s|$)", text)
+    if m:
+        day = int(m.group(1))
+        month = int(m.group(2))
+        year = now_local.year
+        try:
+            candidate = now_local.replace(year=year, month=month, day=day)
+            if candidate.date() < now_local.date():
+                candidate = candidate.replace(year=year + 1)
+            return candidate
+        except ValueError:
+            pass
+
+    return None
+
+
 def main():
     st.set_page_config(page_title="MailAI Local", layout="wide")
     st.title("MailAI Local")
@@ -853,6 +899,13 @@ def main():
                 if start_default.tzinfo:
                     start_default = start_default.astimezone().replace(tzinfo=None)
                 start_default = start_default.replace(second=0, microsecond=0) + timedelta(hours=1)
+                hint_date = parse_deadline_date_hint(itm.get("deadline_hint"))
+                if hint_date is not None:
+                    start_default = start_default.replace(
+                        year=hint_date.year,
+                        month=hint_date.month,
+                        day=hint_date.day,
+                    )
 
                 date_key = f"event_date_{msg_id}"
                 time_key = f"event_time_{msg_id}"
@@ -868,7 +921,13 @@ def main():
                         unsafe_allow_html=True,
                     )
                 with col_date:
-                    st.date_input("Datum", value=start_default.date(), key=date_key, label_visibility="collapsed")
+                    st.date_input(
+                        "Datum",
+                        value=start_default.date(),
+                        key=date_key,
+                        format="DD/MM/YYYY",
+                        label_visibility="collapsed",
+                    )
                 with col_time:
                     st.time_input("Čas", value=start_default.time(), key=time_key, label_visibility="collapsed")
                 with col_dur:
