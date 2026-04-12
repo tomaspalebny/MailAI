@@ -59,6 +59,7 @@ BUCKET_UI = {
     "k_preposlani":     {"label": "K přeposlání",      "color": "#2980b9", "emoji": "🔵"},
     "ignorovat":        {"label": "Ignorovat",         "color": "#95a5a6", "emoji": "⚫"},
 }
+BUCKET_ORDER = tuple(BUCKET_UI.keys())
 
 
 def load_local_settings() -> dict:
@@ -456,6 +457,89 @@ def graph_assign_category(token: str, msg_id: str, category_name: str) -> None:
     patch_r.raise_for_status()
 
 
+def initialize_bucket_overrides(result: dict) -> None:
+    new_ids = set()
+    for bucket_key in BUCKET_ORDER:
+        for itm in (result.get("buckets") or {}).get(bucket_key, []):
+            msg_id = str(itm.get("id") or "")
+            if not msg_id:
+                continue
+            new_ids.add(msg_id)
+            st.session_state[f"bucket_override_{msg_id}"] = bucket_key
+
+    for old_id in st.session_state.get("editable_bucket_ids", []):
+        if old_id not in new_ids:
+            st.session_state.pop(f"bucket_override_{old_id}", None)
+
+    st.session_state["editable_bucket_ids"] = sorted(new_ids)
+
+
+def get_bucket_overrides(result: dict) -> dict[str, str]:
+    editable_ids = st.session_state.get("editable_bucket_ids") or []
+    if not editable_ids:
+        initialize_bucket_overrides(result)
+        editable_ids = st.session_state.get("editable_bucket_ids") or []
+
+    overrides = {}
+    for msg_id in editable_ids:
+        bucket_key = st.session_state.get(f"bucket_override_{msg_id}")
+        if bucket_key in BUCKET_ORDER:
+            overrides[msg_id] = bucket_key
+    return overrides
+
+
+def build_effective_buckets(result: dict, overrides: dict[str, str]) -> dict[str, list[dict]]:
+    effective = {bucket_key: [] for bucket_key in BUCKET_ORDER}
+    for source_bucket in BUCKET_ORDER:
+        for itm in (result.get("buckets") or {}).get(source_bucket, []):
+            msg_id = str(itm.get("id") or "")
+            target_bucket = overrides.get(msg_id, source_bucket)
+            if target_bucket not in effective:
+                target_bucket = source_bucket
+
+            cloned = dict(itm)
+            cloned["suggested_bucket"] = source_bucket
+            cloned["selected_bucket"] = target_bucket
+            effective[target_bucket].append(cloned)
+    return effective
+
+
+def render_bucket_override_editor(result: dict) -> None:
+    st.markdown("### Ruční úprava štítků")
+    st.caption("Před přiřazením Outlook kategorií můžeš u jednotlivých e-mailů změnit cílovou kategorii.")
+
+    buckets = result.get("buckets") or {}
+    for bucket_key in BUCKET_ORDER:
+        items = buckets.get(bucket_key, [])
+        if not items:
+            continue
+
+        st.markdown(f"**AI navrhlo: {BUCKET_UI[bucket_key]['label']} ({len(items)})**")
+        for itm in items:
+            msg_id = str(itm.get("id") or "")
+            if not msg_id:
+                continue
+
+            col_info, col_choice = st.columns([5, 2])
+            with col_info:
+                st.markdown(
+                    f"**{itm.get('subject', '(bez předmětu)')}**  \n"
+                    f"<span style='color:#666'>{itm.get('from', '(neznámý odesílatel)')}</span>",
+                    unsafe_allow_html=True,
+                )
+                if itm.get("reason"):
+                    st.caption(itm["reason"])
+
+            with col_choice:
+                st.selectbox(
+                    "Cílová kategorie",
+                    options=list(BUCKET_ORDER),
+                    format_func=lambda value: BUCKET_UI[value]["label"],
+                    key=f"bucket_override_{msg_id}",
+                    label_visibility="collapsed",
+                )
+
+
 def render_bucket(bucket_key: str, items: list[dict]):
     cfg = BUCKET_UI.get(bucket_key, {"label": bucket_key, "color": "#888", "emoji": ""})
     label = cfg["label"]
@@ -476,9 +560,16 @@ def render_bucket(bucket_key: str, items: list[dict]):
         if itm.get("has_deadline"):
             hint = itm.get("deadline_hint") or "termín"
             deadline_badge = f' <span style="background:#7d3c98;color:#fff;border-radius:4px;padding:1px 6px;font-size:0.8rem">📅 {hint}</span>'
+        moved_badge = ""
+        if itm.get("suggested_bucket") and itm.get("suggested_bucket") != bucket_key:
+            original_label = BUCKET_UI.get(itm["suggested_bucket"], {}).get("label", itm["suggested_bucket"])
+            moved_badge = (
+                ' <span style="background:#ecf0f1;color:#2c3e50;border-radius:4px;padding:1px 6px;font-size:0.8rem">'
+                f'Původně: {original_label}</span>'
+            )
         st.markdown(
             f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
-            f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}',
+            f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
             unsafe_allow_html=True,
         )
         if itm.get("reason"):
@@ -646,6 +737,7 @@ def main():
 
             st.session_state["inbox_result"] = result
             st.session_state["graph_token"] = graph_token
+            initialize_bucket_overrides(result)
             st.success("Souhrn hotový")
         except APITimeoutError:
             st.error(
@@ -663,20 +755,25 @@ def main():
 
     result = st.session_state.get("inbox_result")
     if result:
+        bucket_overrides = get_bucket_overrides(result)
+        effective_buckets = build_effective_buckets(result, bucket_overrides)
+        effective_counts = {bucket_key: len(effective_buckets[bucket_key]) for bucket_key in BUCKET_ORDER}
+
         st.markdown("### Výsledek")
         st.write(result.get("overview", ""))
 
-        counts = result.get("counts", {})
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Urgentní", counts.get("urgentni", 0))
-        c2.metric("Středně důležité", counts.get("stredne_dulezite", 0))
-        c3.metric("Počká", counts.get("pocka", 0))
-        c4.metric("K přeposlání", counts.get("k_preposlani", 0))
-        c5.metric("Ignorovat", counts.get("ignorovat", 0))
+        c1.metric("Urgentní", effective_counts.get("urgentni", 0))
+        c2.metric("Středně důležité", effective_counts.get("stredne_dulezite", 0))
+        c3.metric("Počká", effective_counts.get("pocka", 0))
+        c4.metric("K přeposlání", effective_counts.get("k_preposlani", 0))
+        c5.metric("Ignorovat", effective_counts.get("ignorovat", 0))
 
-        buckets = result.get("buckets", {})
-        for bkey in ("urgentni", "stredne_dulezite", "pocka", "k_preposlani", "ignorovat"):
-            render_bucket(bkey, buckets.get(bkey, []))
+        render_bucket_override_editor(result)
+
+        st.markdown("### Aktuální rozdělení")
+        for bkey in BUCKET_ORDER:
+            render_bucket(bkey, effective_buckets.get(bkey, []))
 
         st.markdown("### Doporučené hromadné akce")
         actions = result.get("recommended_bulk_actions", {})
@@ -687,10 +784,9 @@ def main():
 
         token = st.session_state.get("graph_token", "")
         if token:
-            if st.button("Přiřadit štítky podle AI třídění"):
+            if st.button("Přiřadit štítky podle aktuálního rozdělení"):
                 ok = 0
                 fail = 0
-                buckets = result.get("buckets", {})
                 categories_prepared = False
                 try:
                     ensure_mailai_master_categories(token)
@@ -708,7 +804,7 @@ def main():
 
                 deadline_cat_name = MAILAI_DEADLINE_CATEGORY[0]
                 for bucket_key, (category_name, _) in MAILAI_CATEGORY_MAP.items():
-                    for itm in buckets.get(bucket_key, []):
+                    for itm in effective_buckets.get(bucket_key, []):
                         msg_id = itm.get("id")
                         if not msg_id:
                             continue
