@@ -509,54 +509,7 @@ def build_effective_buckets(result: dict, overrides: dict[str, str]) -> dict[str
     return effective
 
 
-def render_bucket_override_editor(result: dict) -> None:
-    st.markdown("### Ruční úprava štítků")
-    st.caption("Před přiřazením Outlook kategorií můžeš u jednotlivých e-mailů změnit cílovou kategorii.")
-
-    buckets = result.get("buckets") or {}
-    rendered_ids = set()
-    skipped_duplicates = 0
-    for bucket_key in BUCKET_ORDER:
-        items = buckets.get(bucket_key, [])
-        if not items:
-            continue
-
-        st.markdown(f"**AI navrhlo: {BUCKET_UI[bucket_key]['label']} ({len(items)})**")
-        for itm in items:
-            msg_id = str(itm.get("id") or "")
-            if not msg_id:
-                continue
-            if msg_id in rendered_ids:
-                skipped_duplicates += 1
-                continue
-            rendered_ids.add(msg_id)
-
-            col_info, col_choice = st.columns([5, 2])
-            with col_info:
-                st.markdown(
-                    f"**{itm.get('subject', '(bez předmětu)')}**  \n"
-                    f"<span style='color:#666'>{itm.get('from', '(neznámý odesílatel)')}</span>",
-                    unsafe_allow_html=True,
-                )
-                if itm.get("reason"):
-                    st.caption(itm["reason"])
-
-            with col_choice:
-                st.selectbox(
-                    "Cílová kategorie",
-                    options=list(BUCKET_ORDER),
-                    format_func=lambda value: BUCKET_UI[value]["label"],
-                    key=f"bucket_override_{msg_id}",
-                    label_visibility="collapsed",
-                )
-
-    if skipped_duplicates:
-        st.caption(
-            f"AI vrátila duplicitní položky ({skipped_duplicates}x), byly skryty, aby bylo možné štítky bezpečně upravit."
-        )
-
-
-def render_bucket(bucket_key: str, items: list[dict]):
+def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
     cfg = BUCKET_UI.get(bucket_key, {"label": bucket_key, "color": "#888", "emoji": ""})
     label = cfg["label"]
     color = cfg["color"]
@@ -572,6 +525,7 @@ def render_bucket(bucket_key: str, items: list[dict]):
         st.caption("Bez položek")
         return
     for itm in items[:50]:
+        msg_id = str(itm.get("id") or "")
         deadline_badge = ""
         if itm.get("has_deadline"):
             hint = itm.get("deadline_hint") or "termín"
@@ -583,13 +537,33 @@ def render_bucket(bucket_key: str, items: list[dict]):
                 ' <span style="background:#ecf0f1;color:#2c3e50;border-radius:4px;padding:1px 6px;font-size:0.8rem">'
                 f'Původně: {original_label}</span>'
             )
-        st.markdown(
-            f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
-            f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
-            unsafe_allow_html=True,
-        )
-        if itm.get("reason"):
-            st.caption(itm["reason"])
+
+        if editable and msg_id:
+            col_info, col_choice = st.columns([5, 2])
+            with col_info:
+                st.markdown(
+                    f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
+                    f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
+                    unsafe_allow_html=True,
+                )
+                if itm.get("reason"):
+                    st.caption(itm["reason"])
+            with col_choice:
+                st.selectbox(
+                    "Cílová kategorie",
+                    options=list(BUCKET_ORDER),
+                    format_func=lambda value: BUCKET_UI[value]["label"],
+                    key=f"bucket_override_{msg_id}",
+                    label_visibility="collapsed",
+                )
+        else:
+            st.markdown(
+                f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
+                f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
+                unsafe_allow_html=True,
+            )
+            if itm.get("reason"):
+                st.caption(itm["reason"])
 
 
 def main():
@@ -688,9 +662,14 @@ def main():
 
         models = st.session_state.get("models", [])
         if models:
-            selected = st.selectbox("Vyber model z načtených", options=models, index=0)
+            current_model = st.session_state.get("model", "")
+            default_index = models.index(current_model) if current_model in models else 0
+            selected = st.selectbox("Vyber model z načtených", options=models, index=default_index)
             if st.button("Použít vybraný model"):
                 st.session_state["selected_model"] = selected
+                st.session_state["model"] = selected
+                if st.session_state.get("auto_save_settings", True):
+                    save_local_settings(build_settings_payload())
                 st.success(f"Model nastaven: {selected}")
 
     final_model = st.session_state.get("selected_model") or model
@@ -785,11 +764,10 @@ def main():
         c4.metric("K přeposlání", effective_counts.get("k_preposlani", 0))
         c5.metric("Ignorovat", effective_counts.get("ignorovat", 0))
 
-        render_bucket_override_editor(result)
-
-        st.markdown("### Aktuální rozdělení")
+        st.markdown("### Aktuální rozdělení (možno upravit)")
+        st.caption("Kategorie můžeš měnit přímo u každého e-mailu v tomto přehledu.")
         for bkey in BUCKET_ORDER:
-            render_bucket(bkey, effective_buckets.get(bkey, []))
+            render_bucket(bkey, effective_buckets.get(bkey, []), editable=True)
 
         st.markdown("### Doporučené hromadné akce")
         actions = result.get("recommended_bulk_actions", {})
