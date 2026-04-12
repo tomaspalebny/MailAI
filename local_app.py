@@ -597,7 +597,6 @@ def main():
             max_value=240,
             key="urgent_reminder_hours",
         )
-        model = st.text_input("Model", key="model")
         graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
         days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
         top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, key="top")
@@ -661,18 +660,28 @@ def main():
                 )
 
         models = st.session_state.get("models", [])
+        current_model = st.session_state.get("model", "")
         if models:
-            current_model = st.session_state.get("model", "")
-            default_index = models.index(current_model) if current_model in models else 0
-            selected = st.selectbox("Vyber model z načtených", options=models, index=default_index)
-            if st.button("Použít vybraný model"):
-                st.session_state["selected_model"] = selected
-                st.session_state["model"] = selected
-                if st.session_state.get("auto_save_settings", True):
-                    save_local_settings(build_settings_payload())
-                st.success(f"Model nastaven: {selected}")
+            model_options = ["(Vlastní model)"] + models
+            default_choice = current_model if current_model in models else "(Vlastní model)"
+            selected_choice = st.selectbox(
+                "Model",
+                options=model_options,
+                index=model_options.index(default_choice),
+                key="model_picker",
+            )
+            if selected_choice == "(Vlastní model)":
+                custom_model_value = current_model if current_model not in models else ""
+                chosen_model = st.text_input("Vlastní název modelu", value=custom_model_value, key="model_custom")
+            else:
+                chosen_model = selected_choice
+        else:
+            chosen_model = st.text_input("Model", value=current_model, key="model_custom_no_list")
 
-    final_model = st.session_state.get("selected_model") or model
+        if chosen_model != current_model:
+            st.session_state["model"] = chosen_model
+
+    final_model = st.session_state.get("model", "")
 
     st.markdown("### Inbox souhrn (nepřečtené e-maily)")
     if st.button("Analyzovat nepřečtené e-maily za posledních N dní", type="primary"):
