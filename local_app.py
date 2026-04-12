@@ -96,6 +96,7 @@ def save_local_settings(settings: dict) -> None:
 
 def build_settings_payload() -> dict:
     return {
+        "system_prompt": st.session_state.get("system_prompt", INBOX_PROMPT),
         "llm_api_key": st.session_state.get("llm_api_key", ""),
         "llm_base_url": st.session_state.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/"),
         "llm_timeout": int(st.session_state.get("llm_timeout", 60)),
@@ -123,6 +124,7 @@ def initialize_state_from_settings() -> None:
     if st.session_state.get("settings_initialized"):
         return
     saved = load_local_settings()
+    st.session_state["system_prompt"] = saved.get("system_prompt", INBOX_PROMPT)
     st.session_state["llm_api_key"] = saved.get("llm_api_key", "")
     st.session_state["llm_base_url"] = saved.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/")
     st.session_state["llm_timeout"] = int(saved.get("llm_timeout", 60))
@@ -162,6 +164,32 @@ def merge_prompt(base_prompt: str, custom_prompt: str, senders: list[str]) -> st
         parts.append("Preferovaní odesílatelé: " + ", ".join(senders))
 
     return "\n\n".join(parts)
+
+
+def reset_system_prompt() -> None:
+    st.session_state["system_prompt"] = INBOX_PROMPT
+
+
+def validate_system_prompt(prompt: str) -> list[str]:
+    issues = []
+    normalized_prompt = (prompt or "").strip()
+    lowered = normalized_prompt.lower()
+
+    if not normalized_prompt:
+        return ["Systémový prompt je prázdný."]
+
+    if "json" not in lowered:
+        issues.append("Chybí explicitní požadavek na validní JSON výstup.")
+    if "buckets" not in lowered:
+        issues.append("Chybí definice pole 'buckets' pro rozdělení e-mailů.")
+    if "recommended_bulk_actions" not in lowered:
+        issues.append("Chybí definice pole 'recommended_bulk_actions'.")
+
+    missing_categories = [bucket_key for bucket_key in BUCKET_ORDER if bucket_key not in lowered]
+    if missing_categories:
+        issues.append("Chybí některé povinné kategorie: " + ", ".join(missing_categories))
+
+    return issues
 
 
 def parse_json_content(content: str) -> dict:
@@ -801,6 +829,17 @@ def main():
 
     with st.sidebar:
         st.header("Nastavení")
+        system_prompt = st.text_area(
+            "Systémový prompt",
+            height=220,
+            key="system_prompt",
+            help="Hlavní instrukce pro AI analýzu. Ukládá se do lokálního nastavení.",
+        )
+        st.button(
+            "Obnovit výchozí systémový prompt",
+            on_click=reset_system_prompt,
+            help="Vrátí systémový prompt na původní výchozí hodnotu.",
+        )
         llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
         llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
         llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=600, key="llm_timeout")
@@ -837,6 +876,20 @@ def main():
         priority_senders_raw = st.text_area("Preferovaní odesílatelé", height=80, key="priority_senders_raw")
         auto_save_settings = st.checkbox("Automaticky ukládat nastavení lokálně", key="auto_save_settings")
 
+        preview_senders = [
+            sender.strip() for sender in priority_senders_raw.replace(",", "\n").split("\n") if sender.strip()
+        ]
+        prompt_validation_issues = validate_system_prompt(system_prompt)
+        if prompt_validation_issues:
+            st.warning("Validace systémového promptu našla problém, který může rozbít analýzu:")
+            for issue in prompt_validation_issues:
+                st.caption(f"- {issue}")
+        else:
+            st.caption("Systémový prompt prošel základní validací.")
+
+        with st.expander("Náhled finálního promptu pro model"):
+            st.code(merge_prompt(system_prompt or INBOX_PROMPT, custom_prompt, preview_senders), language="text")
+
         col_save, col_clear = st.columns(2)
         if col_save.button("Uložit"):
             save_local_settings(build_settings_payload())
@@ -844,6 +897,7 @@ def main():
         if col_clear.button("Smazat"):
             if SETTINGS_FILE.exists():
                 SETTINGS_FILE.unlink()
+            st.session_state["system_prompt"] = INBOX_PROMPT
             st.success("Lokální uložené nastavení smazáno")
 
         if st.button("Načíst modely"):
@@ -1000,6 +1054,12 @@ def main():
 
     st.markdown("### Inbox souhrn (nepřečtené e-maily)")
     if st.button("Analyzovat nepřečtené e-maily za posledních N dní", type="primary"):
+        prompt_issues = validate_system_prompt(system_prompt)
+        if prompt_issues:
+            st.error("Systémový prompt neprošel validací. Uprav ho před spuštěním analýzy.")
+            for issue in prompt_issues:
+                st.caption(f"- {issue}")
+            return
         if not llm_api_key:
             st.error("Zadej LLM API key")
             return
@@ -1011,7 +1071,7 @@ def main():
             return
 
         senders = [s.strip() for s in priority_senders_raw.replace(",", "\n").split("\n") if s.strip()]
-        prompt = merge_prompt(INBOX_PROMPT, custom_prompt, senders)
+        prompt = merge_prompt(system_prompt or INBOX_PROMPT, custom_prompt, senders)
 
         try:
             if auto_save_settings:
