@@ -4,6 +4,7 @@ import re
 import html
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
@@ -405,6 +406,20 @@ def format_received_datetime(value: str) -> str:
         return ""
 
 
+def build_outlook_app_link(web_link: str) -> str:
+    if not web_link:
+        return ""
+    try:
+        parsed = urlparse(web_link)
+        if parsed.scheme not in ("http", "https"):
+            return ""
+        if "outlook" not in parsed.netloc and "office" not in parsed.netloc:
+            return ""
+        return urlunparse(("ms-outlook", parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    except Exception:
+        return ""
+
+
 def graph_patch_read(token: str, msg_id: str) -> None:
     r = requests.patch(
         f"https://graph.microsoft.com/v1.0/me/messages/{msg_id}",
@@ -650,9 +665,21 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
         subject = html.escape(str(itm.get("subject", "") or "(bez předmětu)"))
         sender = html.escape(str(itm.get("from", "") or ""))
         web_link = str(itm.get("webLink") or "").strip()
+        app_link = build_outlook_app_link(web_link)
         received_label = format_received_datetime(str(itm.get("receivedDateTime") or ""))
         received_suffix = f" | doručeno: {received_label}" if received_label else ""
-        if web_link:
+        if web_link and app_link:
+            onclick_js = (
+                f"event.preventDefault();window.location.href={json.dumps(app_link)};"
+                f"setTimeout(function(){{window.location.href={json.dumps(web_link)};}},900);"
+            )
+            subject_html = (
+                f'<a href="{html.escape(web_link, quote=True)}" target="_blank" '
+                f'onclick="{html.escape(onclick_js, quote=True)}" '
+                f'title="Primárně otevře v Outlook aplikaci, při nedostupnosti přejde na web" '
+                f'style="text-decoration:none;color:inherit"><strong>{subject}</strong></a>'
+            )
+        elif web_link:
             subject_html = (
                 f'<a href="{html.escape(web_link, quote=True)}" target="_blank" '
                 f'style="text-decoration:none;color:inherit"><strong>{subject}</strong></a>'

@@ -199,7 +199,7 @@ V aplikaci vyplň:
 
 Po AI analýze můžeš v lokální aplikaci u každého e-mailu ručně změnit navržený štítek ještě předtím, než se kategorie zapíšou do Outlooku.
 
-U každého e-mailu se zobrazuje i datum doručení. Kliknutím na předmět e-mailu se otevře zpráva v Outlooku (webLink z Microsoft Graph).
+U každého e-mailu se zobrazuje i datum doručení. Kliknutí na předmět se pokusí zprávu otevřít primárně v Outlook aplikaci (`ms-outlook://`) a pokud to není k dispozici, přejde na webový Outlook odkaz (`webLink` z Microsoft Graph).
 
 Navíc můžeš nastavit, jaké Outlook štítky se mají použít pro jednotlivé AI kategorie:
 - použít už existující Outlook štítky (načtené z mailboxu)
