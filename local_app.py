@@ -91,6 +91,7 @@ def build_settings_payload() -> dict:
         "top": int(st.session_state.get("top", 200)),
         "custom_prompt": st.session_state.get("custom_prompt", ""),
         "priority_senders_raw": st.session_state.get("priority_senders_raw", ""),
+        "calendar_timezone": st.session_state.get("calendar_timezone", "Europe/Prague"),
         "auto_save_settings": bool(st.session_state.get("auto_save_settings", True)),
     }
 
@@ -113,6 +114,7 @@ def initialize_state_from_settings() -> None:
     st.session_state["top"] = int(saved.get("top", 200))
     st.session_state["custom_prompt"] = saved.get("custom_prompt", "")
     st.session_state["priority_senders_raw"] = saved.get("priority_senders_raw", "")
+    st.session_state["calendar_timezone"] = saved.get("calendar_timezone", "Europe/Prague")
     st.session_state["auto_save_settings"] = bool(saved.get("auto_save_settings", True))
     st.session_state["settings_initialized"] = True
 
@@ -356,6 +358,44 @@ def graph_patch_read(token: str, msg_id: str) -> None:
     r.raise_for_status()
 
 
+def graph_create_calendar_event(
+    token: str,
+    subject: str,
+    start_dt: datetime,
+    end_dt: datetime,
+    timezone_name: str,
+    body_text: str,
+) -> dict:
+    payload = {
+        "subject": subject,
+        "body": {
+            "contentType": "Text",
+            "content": body_text,
+        },
+        "start": {
+            "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "timeZone": timezone_name,
+        },
+        "end": {
+            "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "timeZone": timezone_name,
+        },
+        "isReminderOn": True,
+        "categories": [MAILAI_DEADLINE_CATEGORY[0]],
+    }
+    r = requests.post(
+        "https://graph.microsoft.com/v1.0/me/events",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def graph_get_master_categories(token: str) -> set[str]:
     r = requests.get(
         "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
@@ -566,6 +606,23 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
                 st.caption(itm["reason"])
 
 
+def get_deadline_items(effective_buckets: dict[str, list[dict]]) -> list[dict]:
+    deadline_items = []
+    seen_ids = set()
+    for bucket_key in BUCKET_ORDER:
+        for itm in effective_buckets.get(bucket_key, []):
+            if not itm.get("has_deadline"):
+                continue
+            msg_id = str(itm.get("id") or "")
+            if not msg_id or msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
+            cloned = dict(itm)
+            cloned["bucket_key"] = bucket_key
+            deadline_items.append(cloned)
+    return deadline_items
+
+
 def main():
     st.set_page_config(page_title="MailAI Local", layout="wide")
     st.title("MailAI Local")
@@ -598,6 +655,7 @@ def main():
             key="urgent_reminder_hours",
         )
         graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
+        calendar_timezone = st.text_input("Časová zóna kalendáře", key="calendar_timezone")
         days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
         top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, key="top")
         custom_prompt = st.text_area("Custom prompt", height=120, key="custom_prompt")
@@ -651,12 +709,19 @@ def main():
                     graph_token,
                     "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
                 )
+                evt_status, evt_msg = graph_endpoint_status(
+                    graph_token,
+                    "https://graph.microsoft.com/v1.0/me/events",
+                    {"$top": 1, "$select": "id"},
+                )
 
                 st.write(f"/me: {me_status} - {me_msg}")
                 st.write(f"/me/messages: {msg_status} - {msg_msg}")
                 st.write(f"/me/outlook/masterCategories: {cat_status} - {cat_msg}")
+                st.write(f"/me/events: {evt_status} - {evt_msg}")
                 st.caption(
-                    "Pro masterCategories je potřeba MailboxSettings.ReadWrite. Po změně oprávnění vždy vygeneruj nový token."
+                    "Pro masterCategories je potřeba MailboxSettings.ReadWrite a pro kalendář Calendars.ReadWrite. "
+                    "Po změně oprávnění vždy vygeneruj nový token."
                 )
 
         models = st.session_state.get("models", [])
@@ -778,6 +843,69 @@ def main():
         for bkey in BUCKET_ORDER:
             render_bucket(bkey, effective_buckets.get(bkey, []), editable=True)
 
+        deadline_items = get_deadline_items(effective_buckets)
+        if deadline_items:
+            st.markdown("### Termíny do kalendáře")
+            st.caption("U e-mailů s termínem můžeš jedním klikem vytvořit událost v Outlook kalendáři.")
+            for itm in deadline_items:
+                msg_id = str(itm.get("id") or "")
+                start_default = _parse_graph_datetime(itm.get("receivedDateTime", ""))
+                if start_default.tzinfo:
+                    start_default = start_default.astimezone().replace(tzinfo=None)
+                start_default = start_default.replace(second=0, microsecond=0) + timedelta(hours=1)
+
+                date_key = f"event_date_{msg_id}"
+                time_key = f"event_time_{msg_id}"
+                dur_key = f"event_dur_{msg_id}"
+
+                col_info, col_date, col_time, col_dur, col_btn = st.columns([4, 1.3, 1.2, 1, 1.4])
+                with col_info:
+                    hint = itm.get("deadline_hint") or "bez upřesnění"
+                    st.markdown(
+                        f"**{itm.get('subject', '(bez předmětu)')}**  \n"
+                        f"<span style='color:#666'>{itm.get('from', '(neznámý odesílatel)')}</span>"
+                        f"<br><span style='color:#7d3c98'>📅 {hint}</span>",
+                        unsafe_allow_html=True,
+                    )
+                with col_date:
+                    st.date_input("Datum", value=start_default.date(), key=date_key, label_visibility="collapsed")
+                with col_time:
+                    st.time_input("Čas", value=start_default.time(), key=time_key, label_visibility="collapsed")
+                with col_dur:
+                    st.number_input(
+                        "Min",
+                        min_value=15,
+                        max_value=480,
+                        step=15,
+                        value=30,
+                        key=dur_key,
+                        label_visibility="collapsed",
+                    )
+                with col_btn:
+                    if st.button("Vložit do kalendáře", key=f"event_btn_{msg_id}"):
+                        start_dt = datetime.combine(st.session_state[date_key], st.session_state[time_key])
+                        end_dt = start_dt + timedelta(minutes=int(st.session_state[dur_key]))
+                        body_text = (
+                            f"MailAI termín z e-mailu\n"
+                            f"Od: {itm.get('from', '')}\n"
+                            f"Předmět: {itm.get('subject', '')}\n"
+                            f"Deadline hint: {itm.get('deadline_hint') or ''}\n"
+                            f"Důvod: {itm.get('reason') or ''}\n"
+                            f"Message ID: {msg_id}"
+                        )
+                        try:
+                            graph_create_calendar_event(
+                                token,
+                                f"Termín: {itm.get('subject', '(bez předmětu)')}",
+                                start_dt,
+                                end_dt,
+                                calendar_timezone,
+                                body_text,
+                            )
+                            st.success(f"Událost vytvořena pro: {itm.get('subject', '(bez předmětu)')}")
+                        except Exception as e:
+                            st.error(f"Nepodařilo se vytvořit událost v kalendáři: {e}")
+
         st.markdown("### Doporučené hromadné akce")
         actions = result.get("recommended_bulk_actions", {})
         mark_ids = actions.get("mark_read_ids", [])
@@ -846,7 +974,8 @@ def main():
                     st.warning(f"Nepovedlo se označit: {fail}")
 
             st.caption(
-                "Pro hromadné akce je potřeba Mail.ReadWrite. Pro vytváření Outlook kategorií je potřeba MailboxSettings.ReadWrite."
+                "Pro hromadné akce je potřeba Mail.ReadWrite. Pro vytváření Outlook kategorií je potřeba "
+                "MailboxSettings.ReadWrite. Pro vložení termínu do kalendáře je potřeba Calendars.ReadWrite."
             )
 
 

@@ -153,6 +153,8 @@ Pokud je ve firmě zakázané nahrávání Outlook add-inů, použij lokální a
 Co umí:
 - načíst nepřečtené e-maily za posledních N dní
 - udělat AI souhrn v kategoriích urgentní / středně důležité / počká / k přeposlání / ignorovat
+- umožnit ruční změnu navrženého štítku přímo v aktuálním rozdělení
+- vložit termín z e-mailu (u položek s detekovaným termínem) do Outlook kalendáře
 - nabídnout doporučené hromadné akce (označit jako přečtené, smazat)
 
 ### Spuštění bez terminálu (Windows)
@@ -210,6 +212,19 @@ Aplikace vytváří a přiřazuje tyto Outlook kategorie:
 
 `MailAI/S terminem` se přiřadí navíc k urgentním a středně důležitým e-mailům, kde LLM detekuje konkrétní termín (deadline, uzávěrka, schůzka, do kdy).
 
+**Vložení termínu do kalendáře:**
+
+Po analýze se u e-mailů s `has_deadline=true` zobrazí sekce **Termíny do kalendáře**.
+
+U každé položky můžeš nastavit:
+- datum
+- čas
+- délku události (minuty)
+
+Tlačítko `Vložit do kalendáře` vytvoří událost v Outlook kalendáři přes Microsoft Graph endpoint `/me/events`.
+
+V postranním panelu je pole `Časová zóna kalendáře` (výchozí `Europe/Prague`), které se používá při vytváření události.
+
 **Uložení nastavení:**
 Nastavení (API key, token, model, prompt, ...) se ukládá lokálně do souboru `.mailai_local_settings.json` v kořeni projektu. Při příštím spuštění se automaticky načte — není potřeba nic zadávat znovu.
 
@@ -224,10 +239,22 @@ V postranním panelu je tlačítko `Ověřit Graph oprávnění`. Zobrazí:
 - `scp` (scopes) z tokenu
 - status endpointů `/me`, `/me/messages`, `/me/outlook/masterCategories`
 
+Pro kalendář navíc kontroluje i endpoint `/me/events`.
+
 Poznámka:
 - Pro samotné čtení inboxu stačí `Mail.Read`.
 - Pro označení jako přečtené a hromadné akce je potřeba `Mail.ReadWrite`.
 - Pro vytváření Outlook kategorií je potřeba `MailboxSettings.ReadWrite`.
+- Pro vytváření událostí v kalendáři je potřeba `Calendars.ReadWrite`.
+
+### Doporučená Graph oprávnění (delegated scopes)
+
+- `Mail.Read` (čtení inboxu)
+- `Mail.ReadWrite` (označení e-mailů jako přečtené)
+- `MailboxSettings.ReadWrite` (správa Outlook kategorií / masterCategories)
+- `Calendars.ReadWrite` (vytváření kalendářových událostí z termínů)
+
+Po změně scope vždy vygeneruj nový access token.
 
 ## Deploy na Render
 
