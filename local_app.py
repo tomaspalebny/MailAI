@@ -1,6 +1,7 @@
 import json
 import base64
 import re
+import html
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -209,6 +210,7 @@ def _normalize_inbox_items(messages: list[dict]) -> list[dict]:
                 "bodyPreview": m.get("bodyPreview", ""),
                 "importance": m.get("importance", "normal"),
                 "categories": m.get("categories", []),
+                "webLink": m.get("webLink", ""),
             }
         )
     return items
@@ -263,7 +265,7 @@ def fetch_unread_messages(token: str, days: int, top: int) -> list[dict]:
         token,
         "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
         {
-            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories",
+            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories,webLink",
             "$top": top,
             "$orderby": "receivedDateTime DESC",
             "$filter": f"isRead eq false and receivedDateTime ge {since}",
@@ -280,7 +282,7 @@ def fetch_not_replied_messages(token: str, days: int, top: int) -> list[dict]:
         token,
         "https://graph.microsoft.com/v1.0/me/mailfolders/inbox/messages",
         {
-            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories",
+            "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,importance,categories,webLink",
             "$top": min(top, 200),
             "$orderby": "receivedDateTime DESC",
             "$filter": f"receivedDateTime ge {since}",
@@ -368,6 +370,39 @@ def enforce_no_delete_policy(result: dict) -> dict:
     buckets["ignorovat"] = ignore_bucket
     result["buckets"] = buckets
     return result
+
+
+def enrich_result_with_source_metadata(result: dict, source_items: list[dict]) -> dict:
+    source_by_id = {str(item.get("id") or ""): item for item in source_items if item.get("id")}
+    buckets = result.get("buckets") or {}
+
+    for bucket_key in BUCKET_ORDER:
+        enriched_items = []
+        for itm in buckets.get(bucket_key, []):
+            msg_id = str(itm.get("id") or "")
+            source = source_by_id.get(msg_id, {})
+            merged = dict(itm)
+            if source.get("receivedDateTime"):
+                merged["receivedDateTime"] = source.get("receivedDateTime")
+            if source.get("webLink"):
+                merged["webLink"] = source.get("webLink")
+            enriched_items.append(merged)
+        buckets[bucket_key] = enriched_items
+
+    result["buckets"] = buckets
+    return result
+
+
+def format_received_datetime(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = _parse_graph_datetime(value)
+        if dt.tzinfo:
+            dt = dt.astimezone()
+        return dt.strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return ""
 
 
 def graph_patch_read(token: str, msg_id: str) -> None:
@@ -612,6 +647,19 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
         return
     for itm in items[:50]:
         msg_id = str(itm.get("id") or "")
+        subject = html.escape(str(itm.get("subject", "") or "(bez předmětu)"))
+        sender = html.escape(str(itm.get("from", "") or ""))
+        web_link = str(itm.get("webLink") or "").strip()
+        received_label = format_received_datetime(str(itm.get("receivedDateTime") or ""))
+        received_suffix = f" | doručeno: {received_label}" if received_label else ""
+        if web_link:
+            subject_html = (
+                f'<a href="{html.escape(web_link, quote=True)}" target="_blank" '
+                f'style="text-decoration:none;color:inherit"><strong>{subject}</strong></a>'
+            )
+        else:
+            subject_html = f"<strong>{subject}</strong>"
+
         deadline_badge = ""
         if itm.get("has_deadline"):
             hint = itm.get("deadline_hint") or "termín"
@@ -628,8 +676,8 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
             col_info, col_choice = st.columns([5, 2])
             with col_info:
                 st.markdown(
-                    f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
-                    f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
+                    f'<span style="color:{color}">●</span> {subject_html} | '
+                    f'<span style="color:#888">{sender}{received_suffix}</span>{deadline_badge}{moved_badge}',
                     unsafe_allow_html=True,
                 )
                 if itm.get("reason"):
@@ -644,8 +692,8 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
                 )
         else:
             st.markdown(
-                f'<span style="color:{color}">●</span> **{itm.get("subject", "")}** | '
-                f'<span style="color:#888">{itm.get("from", "")}</span>{deadline_badge}{moved_badge}',
+                f'<span style="color:{color}">●</span> {subject_html} | '
+                f'<span style="color:#888">{sender}{received_suffix}</span>{deadline_badge}{moved_badge}',
                 unsafe_allow_html=True,
             )
             if itm.get("reason"):
@@ -969,6 +1017,7 @@ def main():
                 client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
                 result = summarize_unread(client, final_model, prompt, llm_items, int(days))
                 result = enforce_no_delete_policy(result)
+                result = enrich_result_with_source_metadata(result, items)
 
             st.session_state["inbox_result"] = result
             st.session_state["graph_token"] = graph_token
