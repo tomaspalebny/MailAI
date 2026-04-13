@@ -13,6 +13,10 @@ textarea{resize:vertical}
 .tabs{display:flex;gap:6px;margin:10px 0 12px}.tab{padding:8px 10px;border:1px solid #d0d0d0;background:#fff;border-radius:6px;cursor:pointer;font-size:13px}.tab.active{background:#0078d4;color:#fff;border-color:#0078d4}
 .section{display:none}.section.active{display:block}
 .list{margin:0;padding-left:18px}.muted{color:#666;font-size:12px}
+.autocheck-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #d0d0d0;border-radius:6px;background:#f5f5f5;margin-bottom:10px;flex-wrap:wrap}
+.autocheck-dot{width:10px;height:10px;border-radius:50%;background:#aaa;flex-shrink:0}
+.autocheck-dot.running{background:#28a745}
+.autocheck-status{font-size:12px;color:#444;flex:1}
 </style></head><body>
 <h2>📬 Email Triage AI</h2>
 <div class="tabs"><button class="tab active" data-tab="analyze">Analýza</button><button class="tab" data-tab="inbox">Inbox souhrn</button><button class="tab" data-tab="settings">Nastavení</button><button class="tab" data-tab="rules">Pravidla</button></div>
@@ -26,6 +30,8 @@ textarea{resize:vertical}
   <div class="row"><label>Graph Access Token</label><input id="graphToken" type="password" placeholder="Bearer token pro Microsoft Graph"></div>
   <div class="row"><label>Počet dní zpět</label><input id="inboxDays" type="number" min="1" max="30" value="10"></div>
   <div class="row"><label>Max. počet e-mailů</label><input id="inboxTop" type="number" min="10" max="500" value="200"></div>
+  <div class="row"><label>Interval automatické kontroly (minuty)</label><input id="autoCheckInterval" type="number" min="0" max="1440" value="0" placeholder="0"><div class="small" style="margin-top:4px">0 = automatická kontrola vypnuta</div></div>
+  <div class="autocheck-bar" id="autocheckBar" style="display:none"><span class="autocheck-dot" id="autocheckDot"></span><span class="autocheck-status" id="autocheckStatus">Nespuštěno</span><button class="btn btn2" id="autocheckBtn" onclick="toggleAutoCheck()" style="padding:4px 10px;font-size:12px">Spustit</button></div>
   <div class="row"><button class="btn" onclick="analyzeUnreadInbox()">Analyzovat nepřečtené e-maily</button></div>
   <div class="small">Souhrn kategorizuje do: urgentní, středně důležité, počká, k přeposlání, ignorovat.</div>
   <div class="small" style="margin-top:6px">Jak získat Graph token (rychle): otevři Graph Explorer, přihlas se stejným účtem jako v Outlooku, uděl souhlas pro Mail.Read a zkopíruj Access token do pole výše.</div>
@@ -65,17 +71,17 @@ it@..."></textarea></div>
 
 <script>
 const ROAMING_KEYS = {
-  apiUrl:'apiUrl', backendApiKey:'backendApiKey', apiProvider:'apiProvider', llmApiKey:'llmApiKey', llmBaseUrl:'llmBaseUrl', model:'model', graphToken:'graphToken', inboxDays:'inboxDays', inboxTop:'inboxTop', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload'
+  apiUrl:'apiUrl', backendApiKey:'backendApiKey', apiProvider:'apiProvider', llmApiKey:'llmApiKey', llmBaseUrl:'llmBaseUrl', model:'model', graphToken:'graphToken', inboxDays:'inboxDays', inboxTop:'inboxTop', customPrompt:'customPrompt', prioritySenders:'prioritySenders', autoload:'autoload', autoCheckInterval:'autoCheckInterval'
 };
-const DEFAULT_CFG = {apiUrl:'https://mailai-kr2k.onrender.com',backendApiKey:'',apiProvider:'einfra',llmApiKey:'',llmBaseUrl:'https://llm.ai.e-infra.cz/v1/',model:'',graphToken:'',inboxDays:'10',inboxTop:'200',customPrompt:'',prioritySenders:'',autoload:'yes'};
+const DEFAULT_CFG = {apiUrl:'https://mailai-kr2k.onrender.com',backendApiKey:'',apiProvider:'einfra',llmApiKey:'',llmBaseUrl:'https://llm.ai.e-infra.cz/v1/',model:'',graphToken:'',inboxDays:'10',inboxTop:'200',customPrompt:'',prioritySenders:'',autoload:'yes',autoCheckInterval:'0'};
 let cfg = {...DEFAULT_CFG};
 
 function tabs(){document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.getElementById(t.dataset.tab).classList.add('active')}))}
 function setVal(id,val){document.getElementById(id).value = val ?? ''}
 function getVal(id){return document.getElementById(id).value}
 function saveToRoaming(){const rs=Office.context.roamingSettings; Object.entries(cfg).forEach(([k,v])=>rs.set(k,v)); rs.saveAsync(()=>{})}
-function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={...DEFAULT_CFG}; Object.values(ROAMING_KEYS).forEach(k=>{const v=rs.get(k); if(v!==undefined && v!==null && v!=='') cfg[k]=v}); setVal('apiUrl',cfg.apiUrl); setVal('backendApiKey',cfg.backendApiKey); setVal('apiProvider',cfg.apiProvider); setVal('llmApiKey',cfg.llmApiKey); setVal('llmBaseUrl',cfg.llmBaseUrl); setVal('model',cfg.model||''); setVal('graphToken',cfg.graphToken||''); setVal('inboxDays',cfg.inboxDays||'10'); setVal('inboxTop',cfg.inboxTop||'200'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes')}
-function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.backendApiKey=getVal('backendApiKey'); cfg.apiProvider=getVal('apiProvider'); cfg.llmApiKey=getVal('llmApiKey'); cfg.llmBaseUrl=getVal('llmBaseUrl').replace(/\/$/,'/'); cfg.model=getVal('model'); cfg.graphToken=getVal('graphToken'); cfg.inboxDays=getVal('inboxDays')||'10'; cfg.inboxTop=getVal('inboxTop')||'200'; cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload')}
+function loadFromRoaming(){const rs=Office.context.roamingSettings; cfg={...DEFAULT_CFG}; Object.values(ROAMING_KEYS).forEach(k=>{const v=rs.get(k); if(v!==undefined && v!==null && v!=='') cfg[k]=v}); setVal('apiUrl',cfg.apiUrl); setVal('backendApiKey',cfg.backendApiKey); setVal('apiProvider',cfg.apiProvider); setVal('llmApiKey',cfg.llmApiKey); setVal('llmBaseUrl',cfg.llmBaseUrl); setVal('model',cfg.model||''); setVal('graphToken',cfg.graphToken||''); setVal('inboxDays',cfg.inboxDays||'10'); setVal('inboxTop',cfg.inboxTop||'200'); setVal('customPrompt',cfg.customPrompt); setVal('prioritySenders',cfg.prioritySenders); setVal('autoload',cfg.autoload||'yes'); setVal('autoCheckInterval',cfg.autoCheckInterval||'0'); updateAutocheckBar()}
+function syncFromInputs(){cfg.apiUrl=getVal('apiUrl').replace(/\/$/,''); cfg.backendApiKey=getVal('backendApiKey'); cfg.apiProvider=getVal('apiProvider'); cfg.llmApiKey=getVal('llmApiKey'); cfg.llmBaseUrl=getVal('llmBaseUrl').replace(/\/$/,'/'); cfg.model=getVal('model'); cfg.graphToken=getVal('graphToken'); cfg.inboxDays=getVal('inboxDays')||'10'; cfg.inboxTop=getVal('inboxTop')||'200'; cfg.customPrompt=getVal('customPrompt'); cfg.prioritySenders=getVal('prioritySenders'); cfg.autoload=getVal('autoload'); cfg.autoCheckInterval=getVal('autoCheckInterval')||'0'}
 function saveCfg(){syncFromInputs(); saveToRoaming(); show('Uloženo do Outlooku.')}
 function saveRules(){syncFromInputs(); saveToRoaming(); show('Pravidla uložena.')}
 function loadFromSettings(){loadFromRoaming(); loadModels(false); show('Nastavení načteno.')}
@@ -97,6 +103,47 @@ function renderAnalysis(data){
 }
 
 let lastReplyText = '';
+let autoCheckTimer = null;
+let autoCheckLastRun = null;
+
+function updateAutocheckBar(){
+  const interval = parseInt(cfg.autoCheckInterval||'0',10);
+  const bar = document.getElementById('autocheckBar');
+  const dot = document.getElementById('autocheckDot');
+  const statusEl = document.getElementById('autocheckStatus');
+  const btn = document.getElementById('autocheckBtn');
+  if(!bar) return;
+  if(interval <= 0){bar.style.display='none'; return;}
+  bar.style.display='flex';
+  if(autoCheckTimer){
+    dot.className='autocheck-dot running';
+    const lastStr = autoCheckLastRun ? 'Naposledy: '+autoCheckLastRun.toLocaleTimeString() : 'Čeká na první kontrolu';
+    statusEl.textContent='Auto-kontrola každých '+interval+' min. '+lastStr;
+    btn.textContent='Zastavit';
+  } else {
+    dot.className='autocheck-dot';
+    statusEl.textContent='Auto-kontrola vypnuta (interval: '+interval+' min)';
+    btn.textContent='Spustit';
+  }
+}
+
+function startAutoCheck(){
+  const interval = parseInt(cfg.autoCheckInterval||'0',10);
+  if(interval <= 0 || autoCheckTimer) return;
+  autoCheckTimer = setInterval(()=>{analyzeUnreadInbox(); updateAutocheckBar();}, interval*60*1000);
+  updateAutocheckBar();
+}
+
+function stopAutoCheck(){
+  if(autoCheckTimer){clearInterval(autoCheckTimer); autoCheckTimer=null;}
+  updateAutocheckBar();
+}
+
+function toggleAutoCheck(){
+  syncFromInputs();
+  if(autoCheckTimer){stopAutoCheck();} else {startAutoCheck();}
+  saveToRoaming();
+}
 function show(x, raw=false){const o=document.getElementById('out'); o.style.display='block'; o.innerHTML = raw ? x : escapeHtml(x)}
 function escapeHtml(t){return (t||'').replace(/[&<>"]+/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 function insertReply(){
@@ -119,7 +166,7 @@ function analyzeCurrent(){syncFromInputs(); if(!cfg.apiUrl){show('Nejprve nastav
 function showInbox(x, raw=false){const o=document.getElementById('outInbox'); o.style.display='block'; o.innerHTML = raw ? x : escapeHtml(x)}
 function renderBucket(label, arr){if(!Array.isArray(arr)||!arr.length) return `<div><strong>${label}</strong>: 0</div>`; return `<div style="margin-top:8px"><strong>${label}</strong>: ${arr.length}<ul class="list">${arr.slice(0,20).map(e=>`<li><strong>${escapeHtml(e.subject||'')}</strong> (${escapeHtml(e.from||'')})<br><span class="muted">${escapeHtml(e.reason||'')}</span></li>`).join('')}</ul></div>`}
 function renderInboxSummary(data){const c=data.counts||{}; const b=data.buckets||{}; const html=`<div><strong>Souhrn:</strong><br>${escapeHtml(data.overview||'')}</div><div style="margin-top:8px"><strong>Počty:</strong> urgentní ${c.urgentni||0}, středně důležité ${c.stredne_dulezite||0}, počká ${c.pocka||0}, k přeposlání ${c.k_preposlani||0}, ignorovat ${c.ignorovat||0}</div>${renderBucket('Urgentní', b.urgentni)}${renderBucket('Středně důležité', b.stredne_dulezite)}${renderBucket('Počká', b.pocka)}${renderBucket('K přeposlání', b.k_preposlani)}${renderBucket('Ignorovat', b.ignorovat)}`; showInbox(html, true)}
-async function analyzeUnreadInbox(){syncFromInputs(); if(!cfg.apiUrl){showInbox('Nejprve nastavte Backend URL v Nastavení.'); return;} if(!cfg.llmApiKey){showInbox('Nejprve nastavte LLM API key v Nastavení.'); return;} if(!cfg.graphToken){showInbox('Doplňte Graph Access Token v záložce Inbox souhrn.'); return;} const payload={token:cfg.graphToken,days:Math.max(1,parseInt(cfg.inboxDays||'10',10)),top:Math.max(10,parseInt(cfg.inboxTop||'200',10)),model:cfg.model,llmApiKey:cfg.llmApiKey,llmBaseUrl:cfg.llmBaseUrl,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/\r?\n|,/).map(s=>s.trim()).filter(Boolean)}; showInbox('Načítám a analyzuji nepřečtené e-maily...'); try { const resp=await fetch(cfg.apiUrl+'/analyze-inbox',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); const data=await resp.json(); if(!resp.ok){showInbox(data.error || 'Chyba backendu.'); return;} renderInboxSummary(data); } catch(e){ showInbox('Síťová chyba: '+(e && e.message ? e.message : e)); }}
+async function analyzeUnreadInbox(){syncFromInputs(); if(!cfg.apiUrl){showInbox('Nejprve nastavte Backend URL v Nastavení.'); return;} if(!cfg.llmApiKey){showInbox('Nejprve nastavte LLM API key v Nastavení.'); return;} if(!cfg.graphToken){showInbox('Doplňte Graph Access Token v záložce Inbox souhrn.'); return;} const payload={token:cfg.graphToken,days:Math.max(1,parseInt(cfg.inboxDays||'10',10)),top:Math.max(10,parseInt(cfg.inboxTop||'200',10)),model:cfg.model,llmApiKey:cfg.llmApiKey,llmBaseUrl:cfg.llmBaseUrl,customPrompt:cfg.customPrompt,prioritySenders:cfg.prioritySenders.split(/\r?\n|,/).map(s=>s.trim()).filter(Boolean)}; showInbox('Načítám a analyzuji nepřečtené e-maily...'); try { const resp=await fetch(cfg.apiUrl+'/analyze-inbox',{method:'POST',headers:headers(),body:JSON.stringify(payload)}); const data=await resp.json(); if(!resp.ok){showInbox(data.error || 'Chyba backendu.'); return;} autoCheckLastRun=new Date(); renderInboxSummary(data); updateAutocheckBar(); } catch(e){ showInbox('Síťová chyba: '+(e && e.message ? e.message : e)); }}
 function applyTemplate(){const t=getVal('promptTemplate'); const templates={university:'Jsi e-mailový asistent pro univerzitní prostředí. Prioritizuj zprávy od vedení, děkana, studijního oddělení, garantů předmětů a IT podpory. Vždy označ jako P0/P1 zprávy s termínem do 48 hodin, žádosti o schválení nebo provozní incidenty. Ostatní informační zprávy dej do P2 nebo P3. Napiš krátký souhrn a pokud je potřeba reakce, navrhni zdvořilou odpověď v češtině.', it:'Jsi e-mailový asistent pro IT provoz. Prioritizuj incidenty, výpadky, požadavky na přístup, bezpečnostní události a e-maily s konkrétním SLA či deadlinem. Zprávy od klíčových interních adres považuj za vysokou prioritu. Navrhni stručnou technickou odpověď.', student:'Jsi e-mailový asistent pro výuku. Prioritizuj e-maily od studentů, vyučujících a studijního oddělení, zejména pokud obsahují žádost, deadline nebo nutnost schválení. Neurgentní informační zprávy dej do nižší priority.'}; if(templates[t]){document.getElementById('customPrompt').value=templates[t]}} 
-Office.onReady(()=>{tabs(); loadFromRoaming(); loadModels(false); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); }})
+Office.onReady(()=>{tabs(); loadFromRoaming(); loadModels(false); if((cfg.autoload||'yes')==='yes') { show('Nastavení načteno automaticky z Outlooku.'); } if(parseInt(cfg.autoCheckInterval||'0',10)>0 && cfg.graphToken && cfg.llmApiKey && cfg.apiUrl) { startAutoCheck(); }})
 </script></body></html>
