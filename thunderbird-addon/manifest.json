@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "MailAI Thunderbird",
+  "description": "AI triage for unread emails in Thunderbird",
+  "version": "0.1.0",
+  "applications": {
+    "gecko": {
+      "id": "mailai-thunderbird@tomaspalebny",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "messagesRead",
+    "messagesModify",
+    "storage"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  },
+  "browser_action": {
+    "default_title": "MailAI",
+    "default_popup": "popup/popup.html"
+  }
+}
