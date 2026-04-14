@@ -41,9 +41,45 @@ Pravidla:
 - Odpovídej česky.
 """
 
+INBOX_PROMPT_EN = """You are an email assistant. Process the list of unread emails and return only valid JSON with this structure:
+{
+  "overview": "brief summary",
+  "counts": {
+    "urgentni": number,
+    "stredne_dulezite": number,
+    "pocka": number,
+    "k_preposlani": number,
+    "ignorovat": number
+  },
+  "buckets": {
+    "urgentni": [{"id":"...","subject":"...","from":"...","reason":"...","action":"...","has_deadline":true|false,"deadline_hint":"..."}],
+    "stredne_dulezite": [{"id":"...","subject":"...","from":"...","reason":"...","action":"...","has_deadline":true|false,"deadline_hint":"..."}],
+    "pocka": [{"id":"...","subject":"...","from":"...","reason":"...","action":"..."}],
+    "k_preposlani": [{"id":"...","subject":"...","from":"...","reason":"...","forward_to":"...","action":"..."}],
+    "ignorovat": [{"id":"...","subject":"...","from":"...","reason":"...","action":"mark_as_read|ignore"}]
+  },
+  "recommended_bulk_actions": {
+    "mark_read_ids": ["..."]
+  }
+}
+Rules:
+- Use only these categories: urgentni, stredne_dulezite, pocka, k_preposlani, ignorovat.
+- Place each email in exactly one category.
+- Never suggest deleting emails or a delete action.
+- For urgentni and stredne_dulezite: has_deadline=true if the email contains a specific deadline/date (deadline, closing, meeting, by when). deadline_hint = brief description of the deadline in English, or null.
+- Respond in English.
+"""
+
 MAX_EMAILS_FOR_LLM = 120
 SETTINGS_FILE = Path(".mailai_local_settings.json")
 MAILAI_CATEGORY_PREFIX = "MailAI/"
+
+# Internal keys for analysis / label-handling modes (stored in settings as-is)
+ANALYSIS_MODE_UNREAD = "Nepřečtené"
+ANALYSIS_MODE_NOT_REPLIED = "Bez odpovědi (Inbox vs Sent)"
+LABEL_MODE_DEFAULT = "Jen bez MailAI štítku + urgentní připomenutí"
+LABEL_MODE_WITHOUT = "Jen bez MailAI štítku"
+LABEL_MODE_ALL = "Všechny (včetně již označených)"
 # preset0=červená, preset1=oranžová, preset3=žlutá, preset7=modrá, preset12=šedá, preset6=fialová
 MAILAI_CATEGORY_MAP = {
     "urgentni":          ("MailAI/Urgentni",          "preset0"),
@@ -63,6 +99,326 @@ BUCKET_UI = {
     "ignorovat":        {"label": "Ignorovat",         "color": "#95a5a6", "emoji": "⚫"},
 }
 BUCKET_ORDER = tuple(BUCKET_UI.keys())
+
+# ---------------------------------------------------------------------------
+# Internationalisation
+# ---------------------------------------------------------------------------
+
+TRANSLATIONS: dict[str, dict[str, str]] = {
+    "cs": {
+        # Language selector
+        "language_label": "Jazyk / Language",
+        # Page
+        "page_subtitle": "Lokální alternativa bez Outlook add-inu",
+        # Sidebar
+        "sidebar_header": "Nastavení",
+        "system_prompt_expander": "Zobrazit systémový prompt",
+        "system_prompt_label": "Systémový prompt",
+        "system_prompt_help": "Hlavní instrukce pro AI analýzu. Ukládá se do lokálního nastavení.",
+        "reset_prompt_btn": "Obnovit výchozí systémový prompt",
+        "reset_prompt_help": "Vrátí systémový prompt na původní výchozí hodnotu.",
+        "llm_timeout_label": "LLM timeout (sekundy)",
+        "analysis_mode_label": "Režim výběru e-mailů",
+        "analysis_mode_unread": "Nepřečtené",
+        "analysis_mode_not_replied": "Bez odpovědi (Inbox vs Sent)",
+        "label_mode_label": "Práce s již označenými e-maily",
+        "label_mode_default": "Jen bez MailAI štítku + urgentní připomenutí",
+        "label_mode_without": "Jen bez MailAI štítku",
+        "label_mode_all": "Všechny (včetně již označených)",
+        "urgent_reminder_label": "Připomenout urgentní po (hodin)",
+        "calendar_tz_label": "Časová zóna kalendáře",
+        "days_label": "Počet dní zpět",
+        "top_label": "Max počet e-mailů",
+        "custom_prompt_label": "Custom prompt",
+        "custom_prompt_help": "Přidá se k výchozím instrukcím pro analýzu, nenahrazuje je.",
+        "priority_senders_label": "Preferovaní odesílatelé",
+        "auto_save_label": "Automaticky ukládat nastavení lokálně",
+        "prompt_validation_warning": "Validace systémového promptu našla problém, který může rozbít analýzu:",
+        "prompt_validation_ok": "Systémový prompt prošel základní validací.",
+        "prompt_preview_expander": "Náhled finálního promptu pro model",
+        "save_btn": "Uložit",
+        "clear_btn": "Smazat",
+        "settings_saved": "Nastavení uloženo do .mailai_local_settings.json",
+        "settings_cleared": "Lokální uložené nastavení smazáno",
+        "load_models_btn": "Načíst modely",
+        "models_loaded": "Načteno modelů: {n}",
+        "models_load_error": "Chyba načítání modelů: {e}",
+        "verify_graph_btn": "Ověřit Graph oprávnění",
+        "no_graph_token_error": "Nejdřív vlož Graph Access Token",
+        "graph_diag_header": "### Diagnostika Graph tokenu",
+        "not_in_token": "(není v tokenu)",
+        "graph_permissions_caption": (
+            "Pro masterCategories je potřeba MailboxSettings.ReadWrite a pro kalendář Calendars.ReadWrite. "
+            "Po změně oprávnění vždy vygeneruj nový token."
+        ),
+        "labels_header": "### Štítky pro AI kategorie",
+        "use_custom_labels_check": "Použít vlastní mapování štítků",
+        "use_custom_labels_help": "Když je vypnuto, použijí se původní MailAI štítky.",
+        "load_outlook_labels_btn": "Načíst Outlook štítky",
+        "outlook_labels_loaded": "Načteno Outlook štítků: {n}",
+        "outlook_labels_error": "Nepodařilo se načíst Outlook štítky: {e}",
+        "outlook_labels_caption": "Můžeš použít existující Outlook štítky nebo zadat vlastní názvy.",
+        "custom_label_option": "(Vlastní štítek)",
+        "custom_label_name": "Vlastní název",
+        "add_deadline_label_check": "Přidávat doplňkový štítek pro termín",
+        "deadline_label_selector": "Štítek pro termín",
+        "deadline_label_custom_name": "Vlastní název termínového štítku",
+        "default_labels_caption": "Výchozí režim: používají se původní MailAI štítky.",
+        "custom_model_option": "(Vlastní model)",
+        "model_label": "Model",
+        "custom_model_name": "Vlastní název modelu",
+        # Main page
+        "inbox_section": "### Inbox souhrn (nepřečtené e-maily)",
+        "analyze_btn": "Analyzovat nepřečtené e-maily za posledních N dní",
+        "prompt_invalid_error": "Systémový prompt neprošel validací. Uprav ho před spuštěním analýzy.",
+        "no_api_key_error": "Zadej LLM API key",
+        "no_graph_token_error2": "Zadej Graph Access Token",
+        "no_model_error": "Zadej nebo vyber model",
+        "loading_emails_spinner": "Načítám e-maily z Microsoft Graph...",
+        "not_replied_loaded": "Načteno e-mailů bez odpovědi: {n}",
+        "unread_loaded": "Načteno nepřečtených e-mailů: {n}",
+        "filter_stats_info": "Po filtraci štítků do analýzy: {n} | přeskočeno již označených: {m}",
+        "urgent_reincluded_info": "Urgentní připomenutí vráceno do analýzy: {n}",
+        "no_emails_warning": "Po filtraci nezbyly žádné e-maily pro analýzu.",
+        "llm_limit_warning": "Pro LLM analýzu používám prvních {max_n} e-mailů z {total} kvůli rychlosti a stabilitě.",
+        "analyzing_spinner": "Analyzuji přes LLM...",
+        "analysis_done": "Souhrn hotový",
+        "llm_timeout_error": (
+            "LLM timeout: provider neodpověděl včas. Zkus jiný model, ověř Base URL, "
+            "nebo zvýšit timeout v nastavení."
+        ),
+        "model_rejected_error": (
+            "Model odmítl formát vstupu/výstupu. Zkus chat model (např. gpt-4o-mini) "
+            "a klikni znovu na Načíst modely."
+        ),
+        "error_detail": "Detail chyby: {msg}",
+        "generic_error": "Chyba: {e}",
+        "result_header": "### Výsledek",
+        "current_split_header": "### Aktuální rozdělení (možno upravit)",
+        "current_split_caption": "Kategorie můžeš měnit přímo u každého e-mailu v tomto přehledu.",
+        "deadlines_header": "### Termíny do kalendáře",
+        "deadlines_caption": "U e-mailů s termínem můžeš jedním klikem vytvořit událost v Outlook kalendáři.",
+        "no_hint": "bez upřesnění",
+        "no_subject": "(bez předmětu)",
+        "unknown_sender": "(neznámý odesílatel)",
+        "add_to_calendar_btn": "Vložit do kalendáře",
+        "calendar_event_body": "MailAI termín z e-mailu",
+        "calendar_event_from": "Od:",
+        "calendar_event_subject_lbl": "Předmět:",
+        "calendar_event_reason": "Důvod:",
+        "calendar_event_title_prefix": "Termín:",
+        "calendar_event_created": "Událost vytvořena pro: {subject}",
+        "calendar_event_error": "Nepodařilo se vytvořit událost v kalendáři: {e}",
+        "bulk_actions_header": "### Doporučené hromadné akce",
+        "mark_read_count": "Označit jako přečtené: {n}",
+        "delete_count": "Smazat: 0 (zakázáno politikou aplikace)",
+        "assign_labels_btn": "Přiřadit štítky podle aktuálního rozdělení",
+        "categories_forbidden_warning": (
+            "Graph token nemá oprávnění pro správu kategorií (masterCategories). "
+            "Přidej scope MailboxSettings.ReadWrite a vygeneruj nový token. "
+            "Pokusím se pokračovat: pokud kategorie už existují, přiřazení může fungovat."
+        ),
+        "categories_prepare_error": "Nepodařilo se připravit Outlook kategorie: {e}",
+        "labels_assigned_success": "Štítek přiřazen u {ok} e-mailů",
+        "labels_assign_fail": "Nepodařilo se přiřadit štítek u {fail} e-mailů",
+        "categories_missing_info": (
+            "Kategorie pravděpodobně v mailboxu neexistují. Po přidání oprávnění "
+            "MailboxSettings.ReadWrite je aplikace vytvoří automaticky."
+        ),
+        "mark_read_btn": "Provést doporučené označení jako přečtené",
+        "marked_read_success": "Označeno jako přečtené: {ok}",
+        "mark_read_fail": "Nepovedlo se označit: {fail}",
+        "permissions_caption": (
+            "Pro hromadné akce je potřeba Mail.ReadWrite. Pro vytváření Outlook kategorií je potřeba "
+            "MailboxSettings.ReadWrite. Pro vložení termínu do kalendáře je potřeba Calendars.ReadWrite."
+        ),
+        # Bucket labels
+        "bucket_urgentni": "Urgentní",
+        "bucket_stredne_dulezite": "Středně důležité",
+        "bucket_pocka": "Počká",
+        "bucket_k_preposlani": "K přeposlání",
+        "bucket_ignorovat": "Ignorovat",
+        # render_bucket
+        "no_items": "Bez položek",
+        "received_prefix": "doručeno:",
+        "originally_prefix": "Původně:",
+        "target_category": "Cílová kategorie",
+        "outlook_link_title": "Primárně otevře v Outlook aplikaci, při nedostupnosti přejde na web",
+        # validate_system_prompt
+        "prompt_empty": "Systémový prompt je prázdný.",
+        "prompt_missing_json": "Chybí explicitní požadavek na validní JSON výstup.",
+        "prompt_missing_buckets": "Chybí definice pole 'buckets' pro rozdělení e-mailů.",
+        "prompt_missing_bulk_actions": "Chybí definice pole 'recommended_bulk_actions'.",
+        "prompt_missing_categories": "Chybí některé povinné kategorie: {cats}",
+        # merge_prompt
+        "merge_user_instructions": "Doplňující instrukce uživatele:",
+        "merge_priority_senders": "Preferovaní odesílatelé:",
+    },
+    "en": {
+        # Language selector
+        "language_label": "Jazyk / Language",
+        # Page
+        "page_subtitle": "Local alternative without the Outlook add-in",
+        # Sidebar
+        "sidebar_header": "Settings",
+        "system_prompt_expander": "Show system prompt",
+        "system_prompt_label": "System prompt",
+        "system_prompt_help": "Main AI analysis instructions. Saved to local settings.",
+        "reset_prompt_btn": "Reset default system prompt",
+        "reset_prompt_help": "Resets the system prompt to its original default.",
+        "llm_timeout_label": "LLM timeout (seconds)",
+        "analysis_mode_label": "Email selection mode",
+        "analysis_mode_unread": "Unread",
+        "analysis_mode_not_replied": "Not replied (Inbox vs Sent)",
+        "label_mode_label": "Handling of already labeled emails",
+        "label_mode_default": "Without MailAI label + urgent reminder",
+        "label_mode_without": "Without MailAI label only",
+        "label_mode_all": "All (including already labeled)",
+        "urgent_reminder_label": "Remind urgent after (hours)",
+        "calendar_tz_label": "Calendar timezone",
+        "days_label": "Number of days back",
+        "top_label": "Max number of emails",
+        "custom_prompt_label": "Custom prompt",
+        "custom_prompt_help": "Added to the default analysis instructions, does not replace them.",
+        "priority_senders_label": "Priority senders",
+        "auto_save_label": "Auto-save settings locally",
+        "prompt_validation_warning": "System prompt validation found an issue that may break analysis:",
+        "prompt_validation_ok": "System prompt passed basic validation.",
+        "prompt_preview_expander": "Preview final prompt for the model",
+        "save_btn": "Save",
+        "clear_btn": "Clear",
+        "settings_saved": "Settings saved to .mailai_local_settings.json",
+        "settings_cleared": "Local saved settings cleared",
+        "load_models_btn": "Load models",
+        "models_loaded": "Loaded models: {n}",
+        "models_load_error": "Error loading models: {e}",
+        "verify_graph_btn": "Verify Graph permissions",
+        "no_graph_token_error": "Please enter the Graph Access Token first",
+        "graph_diag_header": "### Graph Token Diagnostics",
+        "not_in_token": "(not in token)",
+        "graph_permissions_caption": (
+            "MailboxSettings.ReadWrite is required for masterCategories and "
+            "Calendars.ReadWrite is required for the calendar. "
+            "Always generate a new token after changing permissions."
+        ),
+        "labels_header": "### Labels for AI categories",
+        "use_custom_labels_check": "Use custom label mapping",
+        "use_custom_labels_help": "When disabled, the default MailAI labels are used.",
+        "load_outlook_labels_btn": "Load Outlook labels",
+        "outlook_labels_loaded": "Loaded Outlook labels: {n}",
+        "outlook_labels_error": "Failed to load Outlook labels: {e}",
+        "outlook_labels_caption": "You can use existing Outlook labels or enter custom names.",
+        "custom_label_option": "(Custom label)",
+        "custom_label_name": "Custom name",
+        "add_deadline_label_check": "Add additional label for deadline",
+        "deadline_label_selector": "Label for deadline",
+        "deadline_label_custom_name": "Custom deadline label name",
+        "default_labels_caption": "Default mode: original MailAI labels are used.",
+        "custom_model_option": "(Custom model)",
+        "model_label": "Model",
+        "custom_model_name": "Custom model name",
+        # Main page
+        "inbox_section": "### Inbox summary (unread emails)",
+        "analyze_btn": "Analyze unread emails from the last N days",
+        "prompt_invalid_error": "System prompt failed validation. Fix it before running analysis.",
+        "no_api_key_error": "Enter LLM API key",
+        "no_graph_token_error2": "Enter Graph Access Token",
+        "no_model_error": "Enter or select a model",
+        "loading_emails_spinner": "Loading emails from Microsoft Graph...",
+        "not_replied_loaded": "Loaded not-replied emails: {n}",
+        "unread_loaded": "Loaded unread emails: {n}",
+        "filter_stats_info": "After label filtering for analysis: {n} | skipped already labeled: {m}",
+        "urgent_reincluded_info": "Urgent reminders returned to analysis: {n}",
+        "no_emails_warning": "No emails remaining after filtering for analysis.",
+        "llm_limit_warning": "Using the first {max_n} of {total} emails for LLM analysis for speed and stability.",
+        "analyzing_spinner": "Analyzing via LLM...",
+        "analysis_done": "Summary ready",
+        "llm_timeout_error": (
+            "LLM timeout: provider did not respond in time. Try a different model, "
+            "check the Base URL, or increase the timeout in settings."
+        ),
+        "model_rejected_error": (
+            "Model rejected the input/output format. Try a chat model (e.g. gpt-4o-mini) "
+            "and click Load models again."
+        ),
+        "error_detail": "Error detail: {msg}",
+        "generic_error": "Error: {e}",
+        "result_header": "### Result",
+        "current_split_header": "### Current categorization (editable)",
+        "current_split_caption": "You can change categories directly for each email in this view.",
+        "deadlines_header": "### Deadlines to calendar",
+        "deadlines_caption": "For emails with a deadline, you can create an Outlook calendar event with one click.",
+        "no_hint": "unspecified",
+        "no_subject": "(no subject)",
+        "unknown_sender": "(unknown sender)",
+        "add_to_calendar_btn": "Add to calendar",
+        "calendar_event_body": "MailAI deadline from email",
+        "calendar_event_from": "From:",
+        "calendar_event_subject_lbl": "Subject:",
+        "calendar_event_reason": "Reason:",
+        "calendar_event_title_prefix": "Deadline:",
+        "calendar_event_created": "Event created for: {subject}",
+        "calendar_event_error": "Failed to create calendar event: {e}",
+        "bulk_actions_header": "### Recommended bulk actions",
+        "mark_read_count": "Mark as read: {n}",
+        "delete_count": "Delete: 0 (forbidden by application policy)",
+        "assign_labels_btn": "Assign labels according to current categorization",
+        "categories_forbidden_warning": (
+            "Graph token does not have permission to manage categories (masterCategories). "
+            "Add MailboxSettings.ReadWrite scope and generate a new token. "
+            "I will try to continue: if categories already exist, assignment may work."
+        ),
+        "categories_prepare_error": "Failed to prepare Outlook categories: {e}",
+        "labels_assigned_success": "Label assigned for {ok} emails",
+        "labels_assign_fail": "Failed to assign label for {fail} emails",
+        "categories_missing_info": (
+            "Categories probably don't exist in the mailbox. After adding the "
+            "MailboxSettings.ReadWrite permission, the application will create them automatically."
+        ),
+        "mark_read_btn": "Perform recommended mark as read",
+        "marked_read_success": "Marked as read: {ok}",
+        "mark_read_fail": "Failed to mark: {fail}",
+        "permissions_caption": (
+            "Mail.ReadWrite is required for bulk actions. "
+            "MailboxSettings.ReadWrite is required for creating Outlook categories. "
+            "Calendars.ReadWrite is required for adding deadlines to the calendar."
+        ),
+        # Bucket labels
+        "bucket_urgentni": "Urgent",
+        "bucket_stredne_dulezite": "Moderately important",
+        "bucket_pocka": "Can wait",
+        "bucket_k_preposlani": "To forward",
+        "bucket_ignorovat": "Ignore",
+        # render_bucket
+        "no_items": "No items",
+        "received_prefix": "received:",
+        "originally_prefix": "Originally:",
+        "target_category": "Target category",
+        "outlook_link_title": "Opens in Outlook app primarily, falls back to web if unavailable",
+        # validate_system_prompt
+        "prompt_empty": "System prompt is empty.",
+        "prompt_missing_json": "Missing explicit requirement for valid JSON output.",
+        "prompt_missing_buckets": "Missing definition of 'buckets' field for email categorization.",
+        "prompt_missing_bulk_actions": "Missing definition of 'recommended_bulk_actions' field.",
+        "prompt_missing_categories": "Missing some required categories: {cats}",
+        # merge_prompt
+        "merge_user_instructions": "Additional user instructions:",
+        "merge_priority_senders": "Priority senders:",
+    },
+}
+
+
+def t(key: str, **kwargs) -> str:
+    """Return the translated string for *key* in the currently active language."""
+    lang = st.session_state.get("language", "cs")
+    translations = TRANSLATIONS.get(lang, TRANSLATIONS["cs"])
+    text = translations.get(key, TRANSLATIONS["cs"].get(key, key))
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except (KeyError, IndexError):
+            pass
+    return text
 
 
 def default_bucket_label_map() -> dict[str, str]:
@@ -100,10 +456,8 @@ def build_settings_payload() -> dict:
         "llm_api_key": st.session_state.get("llm_api_key", ""),
         "llm_base_url": st.session_state.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/"),
         "llm_timeout": int(st.session_state.get("llm_timeout", 60)),
-        "analysis_mode": st.session_state.get("analysis_mode", "Nepřečtené"),
-        "label_handling_mode": st.session_state.get(
-            "label_handling_mode", "Jen bez MailAI štítku + urgentní připomenutí"
-        ),
+        "analysis_mode": st.session_state.get("analysis_mode", ANALYSIS_MODE_UNREAD),
+        "label_handling_mode": st.session_state.get("label_handling_mode", LABEL_MODE_DEFAULT),
         "urgent_reminder_hours": int(st.session_state.get("urgent_reminder_hours", 24)),
         "model": st.session_state.get("model", ""),
         "graph_token": st.session_state.get("graph_token_input", ""),
@@ -117,6 +471,7 @@ def build_settings_payload() -> dict:
         "add_deadline_label": bool(st.session_state.get("add_deadline_label", True)),
         "deadline_label_name": st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]),
         "auto_save_settings": bool(st.session_state.get("auto_save_settings", True)),
+        "language": st.session_state.get("language", "cs"),
     }
 
 
@@ -128,10 +483,8 @@ def initialize_state_from_settings() -> None:
     st.session_state["llm_api_key"] = saved.get("llm_api_key", "")
     st.session_state["llm_base_url"] = saved.get("llm_base_url", "https://llm.ai.e-infra.cz/v1/")
     st.session_state["llm_timeout"] = int(saved.get("llm_timeout", 60))
-    st.session_state["analysis_mode"] = saved.get("analysis_mode", "Nepřečtené")
-    st.session_state["label_handling_mode"] = saved.get(
-        "label_handling_mode", "Jen bez MailAI štítku + urgentní připomenutí"
-    )
+    st.session_state["analysis_mode"] = saved.get("analysis_mode", ANALYSIS_MODE_UNREAD)
+    st.session_state["label_handling_mode"] = saved.get("label_handling_mode", LABEL_MODE_DEFAULT)
     st.session_state["urgent_reminder_hours"] = int(saved.get("urgent_reminder_hours", 24))
     st.session_state["model"] = saved.get("model", "")
     st.session_state["graph_token_input"] = saved.get("graph_token", "")
@@ -145,6 +498,7 @@ def initialize_state_from_settings() -> None:
     st.session_state["add_deadline_label"] = bool(saved.get("add_deadline_label", True))
     st.session_state["deadline_label_name"] = str(saved.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
     st.session_state["auto_save_settings"] = bool(saved.get("auto_save_settings", True))
+    st.session_state["language"] = saved.get("language", "cs")
     st.session_state["settings_initialized"] = True
 
 
@@ -158,16 +512,17 @@ def merge_prompt(base_prompt: str, custom_prompt: str, senders: list[str]) -> st
 
     custom_prompt = (custom_prompt or "").strip()
     if custom_prompt:
-        parts.append("Doplňující instrukce uživatele:\n" + custom_prompt)
+        parts.append(t("merge_user_instructions") + "\n" + custom_prompt)
 
     if senders:
-        parts.append("Preferovaní odesílatelé: " + ", ".join(senders))
+        parts.append(t("merge_priority_senders") + " " + ", ".join(senders))
 
     return "\n\n".join(parts)
 
 
 def reset_system_prompt() -> None:
-    st.session_state["system_prompt"] = INBOX_PROMPT
+    lang = st.session_state.get("language", "cs")
+    st.session_state["system_prompt"] = INBOX_PROMPT_EN if lang == "en" else INBOX_PROMPT
 
 
 def validate_system_prompt(prompt: str) -> list[str]:
@@ -176,18 +531,18 @@ def validate_system_prompt(prompt: str) -> list[str]:
     lowered = normalized_prompt.lower()
 
     if not normalized_prompt:
-        return ["Systémový prompt je prázdný."]
+        return [t("prompt_empty")]
 
     if "json" not in lowered:
-        issues.append("Chybí explicitní požadavek na validní JSON výstup.")
+        issues.append(t("prompt_missing_json"))
     if "buckets" not in lowered:
-        issues.append("Chybí definice pole 'buckets' pro rozdělení e-mailů.")
+        issues.append(t("prompt_missing_buckets"))
     if "recommended_bulk_actions" not in lowered:
-        issues.append("Chybí definice pole 'recommended_bulk_actions'.")
+        issues.append(t("prompt_missing_bulk_actions"))
 
     missing_categories = [bucket_key for bucket_key in BUCKET_ORDER if bucket_key not in lowered]
     if missing_categories:
-        issues.append("Chybí některé povinné kategorie: " + ", ".join(missing_categories))
+        issues.append(t("prompt_missing_categories", cats=", ".join(missing_categories)))
 
     return issues
 
@@ -257,7 +612,7 @@ def _parse_graph_datetime(value: str) -> datetime:
 
 
 def filter_items_for_analysis(items: list[dict], mode: str, urgent_reminder_hours: int) -> tuple[list[dict], dict]:
-    if mode == "Všechny (včetně již označených)":
+    if mode == LABEL_MODE_ALL:
         return items, {"skipped_labeled": 0, "urgent_reincluded": 0}
 
     unlabeled = []
@@ -269,7 +624,7 @@ def filter_items_for_analysis(items: list[dict], mode: str, urgent_reminder_hour
         else:
             unlabeled.append(item)
 
-    if mode == "Jen bez MailAI štítku":
+    if mode == LABEL_MODE_WITHOUT:
         return unlabeled, {"skipped_labeled": len(labeled), "urgent_reincluded": 0}
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, urgent_reminder_hours))
@@ -679,7 +1034,7 @@ def build_effective_buckets(result: dict, overrides: dict[str, str]) -> dict[str
 
 def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
     cfg = BUCKET_UI.get(bucket_key, {"label": bucket_key, "color": "#888", "emoji": ""})
-    label = cfg["label"]
+    label = t(f"bucket_{bucket_key}") if f"bucket_{bucket_key}" in TRANSLATIONS["cs"] else cfg["label"]
     color = cfg["color"]
     emoji = cfg["emoji"]
     count = len(items)
@@ -690,16 +1045,17 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
         unsafe_allow_html=True,
     )
     if not items:
-        st.caption("Bez položek")
+        st.caption(t("no_items"))
         return
     for itm in items[:50]:
         msg_id = str(itm.get("id") or "")
-        subject = html.escape(str(itm.get("subject", "") or "(bez předmětu)"))
+        subject = html.escape(str(itm.get("subject", "") or t("no_subject")))
         sender = html.escape(str(itm.get("from", "") or ""))
         web_link = str(itm.get("webLink") or "").strip()
         app_link = build_outlook_app_link(web_link)
         received_label = format_received_datetime(str(itm.get("receivedDateTime") or ""))
-        received_suffix = f" | doručeno: {received_label}" if received_label else ""
+        received_suffix = f" | {t('received_prefix')} {received_label}" if received_label else ""
+        link_title = t("outlook_link_title")
         if web_link and app_link:
             onclick_js = (
                 f"event.preventDefault();window.location.href={json.dumps(app_link)};"
@@ -708,7 +1064,7 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
             subject_html = (
                 f'<a href="{html.escape(web_link, quote=True)}" target="_blank" '
                 f'onclick="{html.escape(onclick_js, quote=True)}" '
-                f'title="Primárně otevře v Outlook aplikaci, při nedostupnosti přejde na web" '
+                f'title="{html.escape(link_title, quote=True)}" '
                 f'style="text-decoration:none;color:inherit"><strong>{subject}</strong></a>'
             )
         elif web_link:
@@ -721,14 +1077,14 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
 
         deadline_badge = ""
         if itm.get("has_deadline"):
-            hint = itm.get("deadline_hint") or "termín"
+            hint = itm.get("deadline_hint") or t("no_hint")
             deadline_badge = f' <span style="background:#7d3c98;color:#fff;border-radius:4px;padding:1px 6px;font-size:0.8rem">📅 {hint}</span>'
         moved_badge = ""
         if itm.get("suggested_bucket") and itm.get("suggested_bucket") != bucket_key:
-            original_label = BUCKET_UI.get(itm["suggested_bucket"], {}).get("label", itm["suggested_bucket"])
+            original_label = t(f"bucket_{itm['suggested_bucket']}") if f"bucket_{itm['suggested_bucket']}" in TRANSLATIONS["cs"] else BUCKET_UI.get(itm["suggested_bucket"], {}).get("label", itm["suggested_bucket"])
             moved_badge = (
                 ' <span style="background:#ecf0f1;color:#2c3e50;border-radius:4px;padding:1px 6px;font-size:0.8rem">'
-                f'Původně: {original_label}</span>'
+                f'{t("originally_prefix")} {original_label}</span>'
             )
 
         if editable and msg_id:
@@ -743,9 +1099,9 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
                     st.caption(itm["reason"])
             with col_choice:
                 st.selectbox(
-                    "Cílová kategorie",
+                    t("target_category"),
                     options=list(BUCKET_ORDER),
-                    format_func=lambda value: BUCKET_UI[value]["label"],
+                    format_func=lambda value: t(f"bucket_{value}") if f"bucket_{value}" in TRANSLATIONS["cs"] else BUCKET_UI[value]["label"],
                     key=f"bucket_override_{msg_id}",
                     label_visibility="collapsed",
                 )
@@ -824,103 +1180,119 @@ def parse_deadline_date_hint(hint: str | None) -> datetime | None:
 def main():
     st.set_page_config(page_title="MailAI Local", layout="wide")
     st.title("MailAI Local")
-    st.caption("Lokální alternativa bez Outlook add-inu")
     initialize_state_from_settings()
+    st.caption(t("page_subtitle"))
 
     with st.sidebar:
-        st.header("Nastavení")
-        system_prompt = st.text_area(
-            "Systémový prompt",
-            height=220,
-            key="system_prompt",
-            help="Hlavní instrukce pro AI analýzu. Ukládá se do lokálního nastavení.",
+        # Language selector – always at the top
+        st.selectbox(
+            t("language_label"),
+            options=["cs", "en"],
+            format_func=lambda v: "Čeština" if v == "cs" else "English",
+            key="language",
         )
-        st.button(
-            "Obnovit výchozí systémový prompt",
-            on_click=reset_system_prompt,
-            help="Vrátí systémový prompt na původní výchozí hodnotu.",
-        )
+
+        st.header(t("sidebar_header"))
+
+        # System prompt – collapsed by default to save space
+        with st.expander(t("system_prompt_expander"), expanded=False):
+            st.text_area(
+                t("system_prompt_label"),
+                height=220,
+                key="system_prompt",
+                help=t("system_prompt_help"),
+            )
+            st.button(
+                t("reset_prompt_btn"),
+                on_click=reset_system_prompt,
+                help=t("reset_prompt_help"),
+            )
+        system_prompt = st.session_state.get("system_prompt", INBOX_PROMPT)
+
         llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
         llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
-        llm_timeout = st.number_input("LLM timeout (sekundy)", min_value=10, max_value=600, key="llm_timeout")
+        llm_timeout = st.number_input(t("llm_timeout_label"), min_value=10, max_value=600, key="llm_timeout")
         analysis_mode = st.selectbox(
-            "Režim výběru e-mailů",
-            options=["Nepřečtené", "Bez odpovědi (Inbox vs Sent)"],
+            t("analysis_mode_label"),
+            options=[ANALYSIS_MODE_UNREAD, ANALYSIS_MODE_NOT_REPLIED],
+            format_func=lambda v: t("analysis_mode_unread") if v == ANALYSIS_MODE_UNREAD else t("analysis_mode_not_replied"),
             key="analysis_mode",
         )
+        _label_mode_display = {
+            LABEL_MODE_DEFAULT: "label_mode_default",
+            LABEL_MODE_WITHOUT: "label_mode_without",
+            LABEL_MODE_ALL: "label_mode_all",
+        }
         label_handling_mode = st.selectbox(
-            "Práce s již označenými e-maily",
-            options=[
-                "Jen bez MailAI štítku + urgentní připomenutí",
-                "Jen bez MailAI štítku",
-                "Všechny (včetně již označených)",
-            ],
+            t("label_mode_label"),
+            options=[LABEL_MODE_DEFAULT, LABEL_MODE_WITHOUT, LABEL_MODE_ALL],
+            format_func=lambda v: t(_label_mode_display.get(v, v)),
             key="label_handling_mode",
         )
         urgent_reminder_hours = st.number_input(
-            "Připomenout urgentní po (hodin)",
+            t("urgent_reminder_label"),
             min_value=1,
             max_value=240,
             key="urgent_reminder_hours",
         )
         graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
-        calendar_timezone = st.text_input("Časová zóna kalendáře", key="calendar_timezone")
-        days = st.number_input("Počet dní zpět", min_value=1, max_value=30, key="days")
-        top = st.number_input("Max počet e-mailů", min_value=10, max_value=1000, key="top")
+        calendar_timezone = st.text_input(t("calendar_tz_label"), key="calendar_timezone")
+        days = st.number_input(t("days_label"), min_value=1, max_value=30, key="days")
+        top = st.number_input(t("top_label"), min_value=10, max_value=1000, key="top")
         custom_prompt = st.text_area(
-            "Custom prompt",
+            t("custom_prompt_label"),
             height=120,
             key="custom_prompt",
-            help="Přidá se k výchozím instrukcím pro analýzu, nenahrazuje je.",
+            help=t("custom_prompt_help"),
         )
-        priority_senders_raw = st.text_area("Preferovaní odesílatelé", height=80, key="priority_senders_raw")
-        auto_save_settings = st.checkbox("Automaticky ukládat nastavení lokálně", key="auto_save_settings")
+        priority_senders_raw = st.text_area(t("priority_senders_label"), height=80, key="priority_senders_raw")
+        auto_save_settings = st.checkbox(t("auto_save_label"), key="auto_save_settings")
 
         preview_senders = [
             sender.strip() for sender in priority_senders_raw.replace(",", "\n").split("\n") if sender.strip()
         ]
         prompt_validation_issues = validate_system_prompt(system_prompt)
         if prompt_validation_issues:
-            st.warning("Validace systémového promptu našla problém, který může rozbít analýzu:")
+            st.warning(t("prompt_validation_warning"))
             for issue in prompt_validation_issues:
                 st.caption(f"- {issue}")
         else:
-            st.caption("Systémový prompt prošel základní validací.")
+            st.caption(t("prompt_validation_ok"))
 
-        with st.expander("Náhled finálního promptu pro model"):
+        with st.expander(t("prompt_preview_expander")):
             st.code(merge_prompt(system_prompt or INBOX_PROMPT, custom_prompt, preview_senders), language="text")
 
         col_save, col_clear = st.columns(2)
-        if col_save.button("Uložit"):
+        if col_save.button(t("save_btn")):
             save_local_settings(build_settings_payload())
-            st.success("Nastavení uloženo do .mailai_local_settings.json")
-        if col_clear.button("Smazat"):
+            st.success(t("settings_saved"))
+        if col_clear.button(t("clear_btn")):
             if SETTINGS_FILE.exists():
                 SETTINGS_FILE.unlink()
             st.session_state["system_prompt"] = INBOX_PROMPT
-            st.success("Lokální uložené nastavení smazáno")
+            st.success(t("settings_cleared"))
 
-        if st.button("Načíst modely"):
+        if st.button(t("load_models_btn")):
             try:
                 client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
                 models = list_models(client)
                 st.session_state["models"] = models
-                st.success(f"Načteno modelů: {len(models)}")
+                st.success(t("models_loaded", n=len(models)))
             except Exception as e:
-                st.error(f"Chyba načítání modelů: {e}")
+                st.error(t("models_load_error", e=e))
 
-        if st.button("Ověřit Graph oprávnění"):
+        if st.button(t("verify_graph_btn")):
             if not graph_token:
-                st.error("Nejdřív vlož Graph Access Token")
+                st.error(t("no_graph_token_error"))
             else:
                 claims = decode_jwt_claims_unverified(graph_token)
                 scp = claims.get("scp", "")
                 roles = claims.get("roles", [])
                 aud = claims.get("aud", "")
 
-                st.markdown("### Diagnostika Graph tokenu")
+                st.markdown(t("graph_diag_header"))
                 st.write(f"aud: {aud}")
-                st.write(f"scp: {scp or '(není v tokenu)'}")
+                st.write(f"scp: {scp or t('not_in_token')}")
                 if roles:
                     st.write(f"roles: {roles}")
 
@@ -948,50 +1320,47 @@ def main():
                 st.write(f"/me/messages: {msg_status} - {msg_msg}")
                 st.write(f"/me/outlook/masterCategories: {cat_status} - {cat_msg}")
                 st.write(f"/me/events: {evt_status} - {evt_msg}")
-                st.caption(
-                    "Pro masterCategories je potřeba MailboxSettings.ReadWrite a pro kalendář Calendars.ReadWrite. "
-                    "Po změně oprávnění vždy vygeneruj nový token."
-                )
+                st.caption(t("graph_permissions_caption"))
 
-        st.markdown("### Štítky pro AI kategorie")
+        st.markdown(t("labels_header"))
         use_custom_label_mapping = st.checkbox(
-            "Použít vlastní mapování štítků",
+            t("use_custom_labels_check"),
             key="use_custom_label_mapping",
-            help="Když je vypnuto, použijí se původní MailAI štítky.",
+            help=t("use_custom_labels_help"),
         )
         if use_custom_label_mapping:
-            if st.button("Načíst Outlook štítky"):
+            if st.button(t("load_outlook_labels_btn")):
                 if not graph_token:
-                    st.error("Nejdřív vlož Graph Access Token")
+                    st.error(t("no_graph_token_error"))
                 else:
                     try:
                         st.session_state["outlook_categories"] = sorted(graph_get_master_categories(graph_token))
-                        st.success(f"Načteno Outlook štítků: {len(st.session_state['outlook_categories'])}")
+                        st.success(t("outlook_labels_loaded", n=len(st.session_state["outlook_categories"])))
                     except Exception as e:
-                        st.error(f"Nepodařilo se načíst Outlook štítky: {e}")
+                        st.error(t("outlook_labels_error", e=e))
 
-            st.caption("Můžeš použít existující Outlook štítky nebo zadat vlastní názvy.")
+            st.caption(t("outlook_labels_caption"))
             existing_labels = st.session_state.get("outlook_categories", [])
             saved_map = normalize_bucket_label_map(st.session_state.get("bucket_label_map"))
             updated_map = {}
 
+            _custom_lbl = t("custom_label_option")
             for bucket_key in BUCKET_ORDER:
-                display_name = BUCKET_UI[bucket_key]["label"]
+                display_name = t(f"bucket_{bucket_key}")
                 current_label = saved_map[bucket_key]
-                options = ["(Vlastní štítek)"] + existing_labels if existing_labels else ["(Vlastní štítek)"]
-                default_choice = current_label if current_label in existing_labels else "(Vlastní štítek)"
+                options = [_custom_lbl] + existing_labels if existing_labels else [_custom_lbl]
+                default_idx = existing_labels.index(current_label) + 1 if current_label in existing_labels else 0
                 selected_choice = st.selectbox(
                     display_name,
                     options=options,
-                    index=options.index(default_choice),
+                    index=default_idx,
                     key=f"bucket_label_choice_{bucket_key}",
                 )
 
-                if selected_choice == "(Vlastní štítek)":
-                    custom_default = current_label
+                if selected_choice == _custom_lbl:
                     custom_label = st.text_input(
-                        "Vlastní název",
-                        value=custom_default,
+                        t("custom_label_name"),
+                        value=current_label,
                         key=f"bucket_label_custom_{bucket_key}",
                         label_visibility="collapsed",
                     )
@@ -1002,72 +1371,70 @@ def main():
             st.session_state["bucket_label_map"] = normalize_bucket_label_map(updated_map)
 
             add_deadline_label = st.checkbox(
-                "Přidávat doplňkový štítek pro termín",
+                t("add_deadline_label_check"),
                 key="add_deadline_label",
             )
             if add_deadline_label:
                 current_deadline_label = str(st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
-                deadline_options = ["(Vlastní štítek)"] + existing_labels if existing_labels else ["(Vlastní štítek)"]
-                deadline_default_choice = (
-                    current_deadline_label if current_deadline_label in existing_labels else "(Vlastní štítek)"
-                )
+                deadline_options = [_custom_lbl] + existing_labels if existing_labels else [_custom_lbl]
+                deadline_default_idx = existing_labels.index(current_deadline_label) + 1 if current_deadline_label in existing_labels else 0
                 deadline_selected_choice = st.selectbox(
-                    "Štítek pro termín",
+                    t("deadline_label_selector"),
                     options=deadline_options,
-                    index=deadline_options.index(deadline_default_choice),
+                    index=deadline_default_idx,
                     key="deadline_label_choice",
                 )
-                if deadline_selected_choice == "(Vlastní štítek)":
+                if deadline_selected_choice == _custom_lbl:
                     st.session_state["deadline_label_name"] = st.text_input(
-                        "Vlastní název termínového štítku",
+                        t("deadline_label_custom_name"),
                         value=current_deadline_label,
                         key="deadline_label_custom",
                     ).strip()
                 else:
                     st.session_state["deadline_label_name"] = deadline_selected_choice
         else:
-            st.caption("Výchozí režim: používají se původní MailAI štítky.")
+            st.caption(t("default_labels_caption"))
 
         models = st.session_state.get("models", [])
         current_model = st.session_state.get("model", "")
+        _custom_model = t("custom_model_option")
         if models:
-            model_options = ["(Vlastní model)"] + models
-            default_choice = current_model if current_model in models else "(Vlastní model)"
+            model_options = [_custom_model] + models
+            default_model_idx = models.index(current_model) + 1 if current_model in models else 0
             selected_choice = st.selectbox(
-                "Model",
+                t("model_label"),
                 options=model_options,
-                index=model_options.index(default_choice),
-                key="model_picker",
+                index=default_model_idx,
             )
-            if selected_choice == "(Vlastní model)":
+            if selected_choice == _custom_model:
                 custom_model_value = current_model if current_model not in models else ""
-                chosen_model = st.text_input("Vlastní název modelu", value=custom_model_value, key="model_custom")
+                chosen_model = st.text_input(t("custom_model_name"), value=custom_model_value, key="model_custom")
             else:
                 chosen_model = selected_choice
         else:
-            chosen_model = st.text_input("Model", value=current_model, key="model_custom_no_list")
+            chosen_model = st.text_input(t("model_label"), value=current_model, key="model_custom_no_list")
 
         if chosen_model != current_model:
             st.session_state["model"] = chosen_model
 
     final_model = st.session_state.get("model", "")
 
-    st.markdown("### Inbox souhrn (nepřečtené e-maily)")
-    if st.button("Analyzovat nepřečtené e-maily za posledních N dní", type="primary"):
+    st.markdown(t("inbox_section"))
+    if st.button(t("analyze_btn"), type="primary"):
         prompt_issues = validate_system_prompt(system_prompt)
         if prompt_issues:
-            st.error("Systémový prompt neprošel validací. Uprav ho před spuštěním analýzy.")
+            st.error(t("prompt_invalid_error"))
             for issue in prompt_issues:
                 st.caption(f"- {issue}")
             return
         if not llm_api_key:
-            st.error("Zadej LLM API key")
+            st.error(t("no_api_key_error"))
             return
         if not graph_token:
-            st.error("Zadej Graph Access Token")
+            st.error(t("no_graph_token_error2"))
             return
         if not final_model:
-            st.error("Zadej nebo vyber model")
+            st.error(t("no_model_error"))
             return
 
         senders = [s.strip() for s in priority_senders_raw.replace(",", "\n").split("\n") if s.strip()]
@@ -1077,39 +1444,33 @@ def main():
             if auto_save_settings:
                 save_local_settings(build_settings_payload())
 
-            with st.spinner("Načítám e-maily z Microsoft Graph..."):
-                if analysis_mode == "Bez odpovědi (Inbox vs Sent)":
+            with st.spinner(t("loading_emails_spinner")):
+                if analysis_mode == ANALYSIS_MODE_NOT_REPLIED:
                     items = fetch_not_replied_messages(graph_token, int(days), int(top))
-                    st.info(f"Načteno e-mailů bez odpovědi: {len(items)}")
+                    st.info(t("not_replied_loaded", n=len(items)))
                 else:
                     items = fetch_unread_messages(graph_token, int(days), int(top))
-                    st.info(f"Načteno nepřečtených e-mailů: {len(items)}")
+                    st.info(t("unread_loaded", n=len(items)))
 
             items, filter_stats = filter_items_for_analysis(
                 items,
                 label_handling_mode,
                 int(urgent_reminder_hours),
             )
-            if label_handling_mode != "Všechny (včetně již označených)":
-                st.info(
-                    f"Po filtraci štítků do analýzy: {len(items)} | přeskočeno již označených: {filter_stats['skipped_labeled']}"
-                )
+            if label_handling_mode != LABEL_MODE_ALL:
+                st.info(t("filter_stats_info", n=len(items), m=filter_stats["skipped_labeled"]))
                 if filter_stats["urgent_reincluded"]:
-                    st.info(
-                        f"Urgentní připomenutí vráceno do analýzy: {filter_stats['urgent_reincluded']}"
-                    )
+                    st.info(t("urgent_reincluded_info", n=filter_stats["urgent_reincluded"]))
 
             if not items:
-                st.warning("Po filtraci nezbyly žádné e-maily pro analýzu.")
+                st.warning(t("no_emails_warning"))
                 return
 
             llm_items = items[:MAX_EMAILS_FOR_LLM]
             if len(items) > MAX_EMAILS_FOR_LLM:
-                st.warning(
-                    f"Pro LLM analýzu používám prvních {MAX_EMAILS_FOR_LLM} e-mailů z {len(items)} kvůli rychlosti a stabilitě."
-                )
+                st.warning(t("llm_limit_warning", max_n=MAX_EMAILS_FOR_LLM, total=len(items)))
 
-            with st.spinner("Analyzuji přes LLM..."):
+            with st.spinner(t("analyzing_spinner")):
                 client = build_client(llm_api_key, llm_base_url, int(llm_timeout))
                 result = summarize_unread(client, final_model, prompt, llm_items, int(days))
                 result = enforce_no_delete_policy(result)
@@ -1118,20 +1479,16 @@ def main():
             st.session_state["inbox_result"] = result
             st.session_state["graph_token"] = graph_token
             initialize_bucket_overrides(result)
-            st.success("Souhrn hotový")
+            st.success(t("analysis_done"))
         except APITimeoutError:
-            st.error(
-                "LLM timeout: provider neodpověděl včas. Zkus jiný model, ověř Base URL, nebo zvyšit timeout v nastavení."
-            )
+            st.error(t("llm_timeout_error"))
         except Exception as e:
             msg = str(e)
             if "required attributes" in msg.lower() or "požadovaných atribut" in msg.lower():
-                st.error(
-                    "Model odmítl formát vstupu/výstupu. Zkus chat model (např. gpt-4o-mini) a klikni znovu na Načíst modely."
-                )
-                st.caption(f"Detail chyby: {msg}")
+                st.error(t("model_rejected_error"))
+                st.caption(t("error_detail", msg=msg))
             else:
-                st.error(f"Chyba: {e}")
+                st.error(t("generic_error", e=e))
 
     result = st.session_state.get("inbox_result")
     if result:
@@ -1140,25 +1497,25 @@ def main():
         effective_buckets = build_effective_buckets(result, bucket_overrides)
         effective_counts = {bucket_key: len(effective_buckets[bucket_key]) for bucket_key in BUCKET_ORDER}
 
-        st.markdown("### Výsledek")
+        st.markdown(t("result_header"))
         st.write(result.get("overview", ""))
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Urgentní", effective_counts.get("urgentni", 0))
-        c2.metric("Středně důležité", effective_counts.get("stredne_dulezite", 0))
-        c3.metric("Počká", effective_counts.get("pocka", 0))
-        c4.metric("K přeposlání", effective_counts.get("k_preposlani", 0))
-        c5.metric("Ignorovat", effective_counts.get("ignorovat", 0))
+        c1.metric(t("bucket_urgentni"), effective_counts.get("urgentni", 0))
+        c2.metric(t("bucket_stredne_dulezite"), effective_counts.get("stredne_dulezite", 0))
+        c3.metric(t("bucket_pocka"), effective_counts.get("pocka", 0))
+        c4.metric(t("bucket_k_preposlani"), effective_counts.get("k_preposlani", 0))
+        c5.metric(t("bucket_ignorovat"), effective_counts.get("ignorovat", 0))
 
-        st.markdown("### Aktuální rozdělení (možno upravit)")
-        st.caption("Kategorie můžeš měnit přímo u každého e-mailu v tomto přehledu.")
+        st.markdown(t("current_split_header"))
+        st.caption(t("current_split_caption"))
         for bkey in BUCKET_ORDER:
             render_bucket(bkey, effective_buckets.get(bkey, []), editable=True)
 
         deadline_items = get_deadline_items(effective_buckets)
         if deadline_items:
-            st.markdown("### Termíny do kalendáře")
-            st.caption("U e-mailů s termínem můžeš jedním klikem vytvořit událost v Outlook kalendáři.")
+            st.markdown(t("deadlines_header"))
+            st.caption(t("deadlines_caption"))
             for itm in deadline_items:
                 msg_id = str(itm.get("id") or "")
                 start_default = _parse_graph_datetime(itm.get("receivedDateTime", ""))
@@ -1179,10 +1536,10 @@ def main():
 
                 col_info, col_date, col_time, col_dur, col_btn = st.columns([4, 1.3, 1.2, 1, 1.4])
                 with col_info:
-                    hint = itm.get("deadline_hint") or "bez upřesnění"
+                    hint = itm.get("deadline_hint") or t("no_hint")
                     st.markdown(
-                        f"**{itm.get('subject', '(bez předmětu)')}**  \n"
-                        f"<span style='color:#666'>{itm.get('from', '(neznámý odesílatel)')}</span>"
+                        f"**{itm.get('subject', t('no_subject'))}**  \n"
+                        f"<span style='color:#666'>{itm.get('from', t('unknown_sender'))}</span>"
                         f"<br><span style='color:#7d3c98'>📅 {hint}</span>",
                         unsafe_allow_html=True,
                     )
@@ -1207,38 +1564,38 @@ def main():
                         label_visibility="collapsed",
                     )
                 with col_btn:
-                    if st.button("Vložit do kalendáře", key=f"event_btn_{msg_id}"):
+                    if st.button(t("add_to_calendar_btn"), key=f"event_btn_{msg_id}"):
                         start_dt = datetime.combine(st.session_state[date_key], st.session_state[time_key])
                         end_dt = start_dt + timedelta(minutes=int(st.session_state[dur_key]))
                         body_text = (
-                            f"MailAI termín z e-mailu\n"
-                            f"Od: {itm.get('from', '')}\n"
-                            f"Předmět: {itm.get('subject', '')}\n"
+                            f"{t('calendar_event_body')}\n"
+                            f"{t('calendar_event_from')} {itm.get('from', '')}\n"
+                            f"{t('calendar_event_subject_lbl')} {itm.get('subject', '')}\n"
                             f"Deadline hint: {itm.get('deadline_hint') or ''}\n"
-                            f"Důvod: {itm.get('reason') or ''}\n"
+                            f"{t('calendar_event_reason')} {itm.get('reason') or ''}\n"
                             f"Message ID: {msg_id}"
                         )
                         try:
                             graph_create_calendar_event(
                                 token,
-                                f"Termín: {itm.get('subject', '(bez předmětu)')}",
+                                f"{t('calendar_event_title_prefix')} {itm.get('subject', t('no_subject'))}",
                                 start_dt,
                                 end_dt,
                                 calendar_timezone,
                                 body_text,
                             )
-                            st.success(f"Událost vytvořena pro: {itm.get('subject', '(bez předmětu)')}")
+                            st.success(t("calendar_event_created", subject=itm.get("subject", t("no_subject"))))
                         except Exception as e:
-                            st.error(f"Nepodařilo se vytvořit událost v kalendáři: {e}")
+                            st.error(t("calendar_event_error", e=e))
 
-        st.markdown("### Doporučené hromadné akce")
+        st.markdown(t("bulk_actions_header"))
         actions = result.get("recommended_bulk_actions", {})
         mark_ids = actions.get("mark_read_ids", [])
 
-        st.write(f"Označit jako přečtené: {len(mark_ids)}")
-        st.write("Smazat: 0 (zakázáno politikou aplikace)")
+        st.write(t("mark_read_count", n=len(mark_ids)))
+        st.write(t("delete_count"))
         if token:
-            if st.button("Přiřadit štítky podle aktuálního rozdělení"):
+            if st.button(t("assign_labels_btn")):
                 ok = 0
                 fail = 0
                 categories_prepared = False
@@ -1266,13 +1623,9 @@ def main():
                     categories_prepared = True
                 except Exception as e:
                     if is_master_categories_forbidden(e):
-                        st.warning(
-                            "Graph token nemá oprávnění pro správu kategorií (masterCategories). "
-                            "Přidej scope MailboxSettings.ReadWrite a vygeneruj nový token. "
-                            "Pokusím se pokračovat: pokud kategorie už existují, přiřazení může fungovat."
-                        )
+                        st.warning(t("categories_forbidden_warning"))
                     else:
-                        st.error(f"Nepodařilo se připravit Outlook kategorie: {e}")
+                        st.error(t("categories_prepare_error", e=e))
                         st.stop()
 
                 for bucket_key in BUCKET_ORDER:
@@ -1288,7 +1641,6 @@ def main():
                             ok += 1
                         except Exception:
                             fail += 1
-                        # Přiřaď navíc štítek S termínem urgentním a středně důležitým s termínem
                         if (
                             add_deadline_label
                             and deadline_cat_name
@@ -1300,16 +1652,13 @@ def main():
                             except Exception:
                                 pass
 
-                st.success(f"Štítek přiřazen u {ok} e-mailů")
+                st.success(t("labels_assigned_success", ok=ok))
                 if fail:
-                    st.warning(f"Nepodařilo se přiřadit štítek u {fail} e-mailů")
+                    st.warning(t("labels_assign_fail", fail=fail))
                 if not categories_prepared and ok == 0:
-                    st.info(
-                        "Kategorie pravděpodobně v mailboxu neexistují. Po přidání oprávnění "
-                        "MailboxSettings.ReadWrite je aplikace vytvoří automaticky."
-                    )
+                    st.info(t("categories_missing_info"))
 
-            if st.button("Provést doporučené označení jako přečtené"):
+            if st.button(t("mark_read_btn")):
                 ok = 0
                 fail = 0
                 for msg_id in mark_ids:
@@ -1318,14 +1667,11 @@ def main():
                         ok += 1
                     except Exception:
                         fail += 1
-                st.success(f"Označeno jako přečtené: {ok}")
+                st.success(t("marked_read_success", ok=ok))
                 if fail:
-                    st.warning(f"Nepovedlo se označit: {fail}")
+                    st.warning(t("mark_read_fail", fail=fail))
 
-            st.caption(
-                "Pro hromadné akce je potřeba Mail.ReadWrite. Pro vytváření Outlook kategorií je potřeba "
-                "MailboxSettings.ReadWrite. Pro vložení termínu do kalendáře je potřeba Calendars.ReadWrite."
-            )
+            st.caption(t("permissions_caption"))
 
 
 if __name__ == "__main__":
