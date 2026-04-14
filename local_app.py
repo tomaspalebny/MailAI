@@ -1217,21 +1217,6 @@ def main():
 
         st.header(t("sidebar_header"))
 
-        # System prompt – collapsed by default to save space
-        with st.expander(t("system_prompt_expander"), expanded=False):
-            st.text_area(
-                t("system_prompt_label"),
-                height=220,
-                key="system_prompt",
-                help=t("system_prompt_help"),
-            )
-            st.button(
-                t("reset_prompt_btn"),
-                on_click=reset_system_prompt,
-                help=t("reset_prompt_help"),
-            )
-        system_prompt = st.session_state.get("system_prompt", INBOX_PROMPT)
-
         llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
         llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
         llm_timeout = st.number_input(t("llm_timeout_label"), min_value=10, max_value=600, key="llm_timeout")
@@ -1270,17 +1255,21 @@ def main():
             help=t("custom_prompt_help"),
         )
         priority_senders_raw = st.text_area(t("priority_senders_label"), height=80, key="priority_senders_raw")
-        auto_save_settings = st.checkbox(t("auto_save_label"), key="auto_save_settings")
-        auto_check_enabled = st.checkbox(t("auto_check_label"), key="auto_check_enabled")
-        if auto_check_enabled:
-            auto_check_interval_minutes = st.number_input(
-                t("auto_check_interval_label"),
-                min_value=1,
-                max_value=60,
-                key="auto_check_interval_minutes",
+
+        # System prompt – collapsed by default to save space
+        with st.expander(t("system_prompt_expander"), expanded=False):
+            st.text_area(
+                t("system_prompt_label"),
+                height=220,
+                key="system_prompt",
+                help=t("system_prompt_help"),
             )
-        else:
-            auto_check_interval_minutes = st.session_state.get("auto_check_interval_minutes", 5)
+            st.button(
+                t("reset_prompt_btn"),
+                on_click=reset_system_prompt,
+                help=t("reset_prompt_help"),
+            )
+        system_prompt = st.session_state.get("system_prompt", INBOX_PROMPT)
 
         preview_senders = [
             sender.strip() for sender in priority_senders_raw.replace(",", "\n").split("\n") if sender.strip()
@@ -1295,6 +1284,18 @@ def main():
 
         with st.expander(t("prompt_preview_expander")):
             st.code(merge_prompt(system_prompt or INBOX_PROMPT, custom_prompt, preview_senders), language="text")
+
+        auto_save_settings = st.checkbox(t("auto_save_label"), key="auto_save_settings")
+        auto_check_enabled = st.checkbox(t("auto_check_label"), key="auto_check_enabled")
+        if auto_check_enabled:
+            auto_check_interval_minutes = st.number_input(
+                t("auto_check_interval_label"),
+                min_value=1,
+                max_value=60,
+                key="auto_check_interval_minutes",
+            )
+        else:
+            auto_check_interval_minutes = st.session_state.get("auto_check_interval_minutes", 5)
 
         col_save, col_clear = st.columns(2)
         if col_save.button(t("save_btn")):
