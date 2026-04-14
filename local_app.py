@@ -2,12 +2,17 @@ import json
 import base64
 import re
 import html
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import requests
 import streamlit as st
+try:
+    import msal
+except ImportError:
+    msal = None
 from openai import OpenAI
 from openai import APITimeoutError
 
@@ -72,6 +77,15 @@ Rules:
 
 MAX_EMAILS_FOR_LLM = 120
 SETTINGS_FILE = Path(".mailai_local_settings.json")
+MSAL_CACHE_FILE = Path(".mailai_msal_cache.json")
+MSAL_SCOPES = [
+    "Mail.ReadWrite",
+    "MailboxSettings.ReadWrite",
+    "Calendars.ReadWrite",
+    "offline_access",
+]
+DEFAULT_MS_TENANT_ID = os.getenv("MAILAI_MS_TENANT_ID", "common")
+DEFAULT_MS_CLIENT_ID = os.getenv("MAILAI_MS_CLIENT_ID", "")
 MAILAI_CATEGORY_PREFIX = "MailAI/"
 
 # Internal keys for analysis / label-handling modes (stored in settings as-is)
@@ -144,7 +158,24 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "models_loaded": "Načteno modelů: {n}",
         "models_load_error": "Chyba načítání modelů: {e}",
         "verify_graph_btn": "Ověřit Graph oprávnění",
-        "no_graph_token_error": "Nejdřív vlož Graph Access Token",
+        "graph_token_label": "Graph Access Token (ručně, volitelné)",
+        "no_graph_token_error": "Nejdřív vlož Graph Access Token nebo se přihlas přes OAuth",
+        "oauth_header": "Microsoft OAuth (delší platnost tokenu)",
+        "oauth_client_id_label": "Azure Client ID",
+        "oauth_tenant_id_label": "Azure Tenant ID",
+        "oauth_signin_btn": "Přihlásit přes Microsoft",
+        "oauth_signout_btn": "Odhlásit Microsoft účet",
+        "oauth_logged_in": "OAuth přihlášen: {account}",
+        "oauth_logged_out": "OAuth nepřihlášen",
+        "oauth_missing_client_id": "Pro OAuth vyplň Azure Client ID.",
+        "oauth_login_failed": "OAuth přihlášení selhalo: {e}",
+        "oauth_cache_cleared": "OAuth cache byla smazána.",
+        "oauth_source_manual": "ruční token",
+        "oauth_source_oauth": "OAuth (MSAL cache)",
+        "oauth_source_none": "není dostupný",
+        "oauth_token_source": "Zdroj Graph tokenu: {source}",
+        "oauth_scopes_caption": "OAuth používá scope: Mail.ReadWrite, MailboxSettings.ReadWrite, Calendars.ReadWrite, offline_access.",
+        "msal_not_installed": "MSAL není nainstalovaný. Doinstaluj závislosti z requirements.txt.",
         "graph_diag_header": "### Diagnostika Graph tokenu",
         "not_in_token": "(není v tokenu)",
         "graph_permissions_caption": (
@@ -172,7 +203,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "analyze_btn": "Analyzovat nepřečtené e-maily za posledních N dní",
         "prompt_invalid_error": "Systémový prompt neprošel validací. Uprav ho před spuštěním analýzy.",
         "no_api_key_error": "Zadej LLM API key",
-        "no_graph_token_error2": "Zadej Graph Access Token",
+        "no_graph_token_error2": "Zadej Graph Access Token nebo se přihlas přes OAuth",
         "no_model_error": "Zadej nebo vyber model",
         "loading_emails_spinner": "Načítám e-maily z Microsoft Graph...",
         "not_replied_loaded": "Načteno e-mailů bez odpovědi: {n}",
@@ -293,7 +324,24 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "models_loaded": "Loaded models: {n}",
         "models_load_error": "Error loading models: {e}",
         "verify_graph_btn": "Verify Graph permissions",
-        "no_graph_token_error": "Please enter the Graph Access Token first",
+        "graph_token_label": "Graph Access Token (manual, optional)",
+        "no_graph_token_error": "Please enter Graph Access Token or sign in via OAuth first",
+        "oauth_header": "Microsoft OAuth (longer token lifetime)",
+        "oauth_client_id_label": "Azure Client ID",
+        "oauth_tenant_id_label": "Azure Tenant ID",
+        "oauth_signin_btn": "Sign in with Microsoft",
+        "oauth_signout_btn": "Sign out Microsoft account",
+        "oauth_logged_in": "OAuth signed in: {account}",
+        "oauth_logged_out": "OAuth not signed in",
+        "oauth_missing_client_id": "Fill in Azure Client ID for OAuth.",
+        "oauth_login_failed": "OAuth sign-in failed: {e}",
+        "oauth_cache_cleared": "OAuth cache has been cleared.",
+        "oauth_source_manual": "manual token",
+        "oauth_source_oauth": "OAuth (MSAL cache)",
+        "oauth_source_none": "not available",
+        "oauth_token_source": "Graph token source: {source}",
+        "oauth_scopes_caption": "OAuth uses scopes: Mail.ReadWrite, MailboxSettings.ReadWrite, Calendars.ReadWrite, offline_access.",
+        "msal_not_installed": "MSAL is not installed. Install dependencies from requirements.txt.",
         "graph_diag_header": "### Graph Token Diagnostics",
         "not_in_token": "(not in token)",
         "graph_permissions_caption": (
@@ -322,7 +370,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "analyze_btn": "Analyze unread emails from the last N days",
         "prompt_invalid_error": "System prompt failed validation. Fix it before running analysis.",
         "no_api_key_error": "Enter LLM API key",
-        "no_graph_token_error2": "Enter Graph Access Token",
+        "no_graph_token_error2": "Enter Graph Access Token or sign in via OAuth",
         "no_model_error": "Enter or select a model",
         "loading_emails_spinner": "Loading emails from Microsoft Graph...",
         "not_replied_loaded": "Loaded not-replied emails: {n}",
@@ -450,6 +498,99 @@ def save_local_settings(settings: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_msal_cache():
+    if msal is None:
+        return None
+    cache = msal.SerializableTokenCache()
+    if MSAL_CACHE_FILE.exists():
+        try:
+            cache.deserialize(MSAL_CACHE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return cache
+
+
+def save_msal_cache(cache) -> None:
+    if cache is None:
+        return
+    if cache.has_state_changed:
+        MSAL_CACHE_FILE.write_text(cache.serialize(), encoding="utf-8")
+
+
+def get_msal_app(client_id: str, tenant_id: str, cache):
+    if msal is None or not client_id:
+        return None
+    authority = f"https://login.microsoftonline.com/{(tenant_id or 'common').strip() or 'common'}"
+    return msal.PublicClientApplication(
+        client_id=client_id.strip(),
+        authority=authority,
+        token_cache=cache,
+    )
+
+
+def acquire_graph_token_silent(client_id: str, tenant_id: str) -> tuple[str, str]:
+    cache = load_msal_cache()
+    app = get_msal_app(client_id, tenant_id, cache)
+    if app is None:
+        return "", ""
+
+    accounts = app.get_accounts()
+    if not accounts:
+        return "", ""
+
+    account = accounts[0]
+    result = app.acquire_token_silent(MSAL_SCOPES, account=account)
+    if isinstance(result, dict) and result.get("access_token"):
+        save_msal_cache(cache)
+        return str(result.get("access_token") or ""), str(account.get("username") or "")
+    return "", ""
+
+
+def acquire_graph_token_interactive(client_id: str, tenant_id: str) -> tuple[str, str, str]:
+    cache = load_msal_cache()
+    app = get_msal_app(client_id, tenant_id, cache)
+    if app is None:
+        return "", "", "MSAL not available or Client ID missing"
+
+    try:
+        result = app.acquire_token_interactive(scopes=MSAL_SCOPES)
+    except Exception as e:
+        return "", "", str(e)
+
+    if isinstance(result, dict) and result.get("access_token"):
+        save_msal_cache(cache)
+        account = result.get("account") or {}
+        account_name = str(account.get("username") or "")
+        if not account_name:
+            claims = result.get("id_token_claims") or {}
+            account_name = str(claims.get("preferred_username") or claims.get("email") or "")
+        return str(result.get("access_token") or ""), account_name, ""
+
+    return "", "", str((result or {}).get("error_description") or (result or {}).get("error") or "Unknown error")
+
+
+def clear_msal_auth_state() -> None:
+    if MSAL_CACHE_FILE.exists():
+        MSAL_CACHE_FILE.unlink()
+    st.session_state.pop("graph_oauth_token", None)
+    st.session_state.pop("graph_oauth_account", None)
+
+
+def resolve_graph_token(manual_token: str, msal_client_id: str, msal_tenant_id: str) -> tuple[str, str]:
+    manual_token = (manual_token or "").strip()
+    if manual_token:
+        return manual_token, t("oauth_source_manual")
+
+    token, account_name = acquire_graph_token_silent(msal_client_id, msal_tenant_id)
+    if token:
+        st.session_state["graph_oauth_token"] = token
+        if account_name:
+            st.session_state["graph_oauth_account"] = account_name
+        return token, t("oauth_source_oauth")
+
+    return "", t("oauth_source_none")
+
+
 def build_settings_payload() -> dict:
     return {
         "system_prompt": st.session_state.get("system_prompt", INBOX_PROMPT),
@@ -461,6 +602,8 @@ def build_settings_payload() -> dict:
         "urgent_reminder_hours": int(st.session_state.get("urgent_reminder_hours", 24)),
         "model": st.session_state.get("model", ""),
         "graph_token": st.session_state.get("graph_token_input", ""),
+        "msal_client_id": st.session_state.get("msal_client_id", DEFAULT_MS_CLIENT_ID),
+        "msal_tenant_id": st.session_state.get("msal_tenant_id", DEFAULT_MS_TENANT_ID),
         "days": int(st.session_state.get("days", 10)),
         "top": int(st.session_state.get("top", 200)),
         "custom_prompt": st.session_state.get("custom_prompt", ""),
@@ -488,6 +631,8 @@ def initialize_state_from_settings() -> None:
     st.session_state["urgent_reminder_hours"] = int(saved.get("urgent_reminder_hours", 24))
     st.session_state["model"] = saved.get("model", "")
     st.session_state["graph_token_input"] = saved.get("graph_token", "")
+    st.session_state["msal_client_id"] = saved.get("msal_client_id", DEFAULT_MS_CLIENT_ID)
+    st.session_state["msal_tenant_id"] = saved.get("msal_tenant_id", DEFAULT_MS_TENANT_ID)
     st.session_state["days"] = int(saved.get("days", 10))
     st.session_state["top"] = int(saved.get("top", 200))
     st.session_state["custom_prompt"] = saved.get("custom_prompt", "")
@@ -1212,6 +1357,43 @@ def main():
         llm_api_key = st.text_input("LLM API key", type="password", key="llm_api_key")
         llm_base_url = st.text_input("LLM Base URL", key="llm_base_url")
         llm_timeout = st.number_input(t("llm_timeout_label"), min_value=10, max_value=600, key="llm_timeout")
+
+        st.subheader(t("oauth_header"))
+        msal_client_id = st.text_input(t("oauth_client_id_label"), key="msal_client_id")
+        msal_tenant_id = st.text_input(t("oauth_tenant_id_label"), key="msal_tenant_id")
+        if msal is None:
+            st.info(t("msal_not_installed"))
+        else:
+            if not st.session_state.get("oauth_bootstrap_done") and msal_client_id.strip():
+                bootstrap_token, bootstrap_account = acquire_graph_token_silent(msal_client_id, msal_tenant_id)
+                if bootstrap_token:
+                    st.session_state["graph_oauth_token"] = bootstrap_token
+                    st.session_state["graph_oauth_account"] = bootstrap_account
+                st.session_state["oauth_bootstrap_done"] = True
+
+            oauth_account = st.session_state.get("graph_oauth_account", "")
+            if st.session_state.get("graph_oauth_token"):
+                st.success(t("oauth_logged_in", account=oauth_account or "?"))
+                if st.button(t("oauth_signout_btn")):
+                    clear_msal_auth_state()
+                    st.success(t("oauth_cache_cleared"))
+                    st.rerun()
+            else:
+                st.caption(t("oauth_logged_out"))
+
+            if st.button(t("oauth_signin_btn")):
+                if not msal_client_id.strip():
+                    st.error(t("oauth_missing_client_id"))
+                else:
+                    oauth_token, oauth_account, oauth_error = acquire_graph_token_interactive(msal_client_id, msal_tenant_id)
+                    if oauth_token:
+                        st.session_state["graph_oauth_token"] = oauth_token
+                        st.session_state["graph_oauth_account"] = oauth_account
+                        st.rerun()
+                    else:
+                        st.error(t("oauth_login_failed", e=oauth_error))
+        st.caption(t("oauth_scopes_caption"))
+
         analysis_mode = st.selectbox(
             t("analysis_mode_label"),
             options=[ANALYSIS_MODE_UNREAD, ANALYSIS_MODE_NOT_REPLIED],
@@ -1235,7 +1417,9 @@ def main():
             max_value=240,
             key="urgent_reminder_hours",
         )
-        graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
+        graph_token = st.text_input(t("graph_token_label"), type="password", key="graph_token_input")
+        effective_graph_token, token_source = resolve_graph_token(graph_token, msal_client_id, msal_tenant_id)
+        st.caption(t("oauth_token_source", source=token_source))
         calendar_timezone = st.text_input(t("calendar_tz_label"), key="calendar_timezone")
         days = st.number_input(t("days_label"), min_value=1, max_value=30, key="days")
         top = st.number_input(t("top_label"), min_value=10, max_value=1000, key="top")
@@ -1282,10 +1466,10 @@ def main():
                 st.error(t("models_load_error", e=e))
 
         if st.button(t("verify_graph_btn")):
-            if not graph_token:
+            if not effective_graph_token:
                 st.error(t("no_graph_token_error"))
             else:
-                claims = decode_jwt_claims_unverified(graph_token)
+                claims = decode_jwt_claims_unverified(effective_graph_token)
                 scp = claims.get("scp", "")
                 roles = claims.get("roles", [])
                 aud = claims.get("aud", "")
@@ -1297,21 +1481,21 @@ def main():
                     st.write(f"roles: {roles}")
 
                 me_status, me_msg = graph_endpoint_status(
-                    graph_token,
+                    effective_graph_token,
                     "https://graph.microsoft.com/v1.0/me",
                     {"$select": "id,userPrincipalName"},
                 )
                 msg_status, msg_msg = graph_endpoint_status(
-                    graph_token,
+                    effective_graph_token,
                     "https://graph.microsoft.com/v1.0/me/messages",
                     {"$top": 1, "$select": "id"},
                 )
                 cat_status, cat_msg = graph_endpoint_status(
-                    graph_token,
+                    effective_graph_token,
                     "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
                 )
                 evt_status, evt_msg = graph_endpoint_status(
-                    graph_token,
+                    effective_graph_token,
                     "https://graph.microsoft.com/v1.0/me/events",
                     {"$top": 1, "$select": "id"},
                 )
@@ -1330,11 +1514,11 @@ def main():
         )
         if use_custom_label_mapping:
             if st.button(t("load_outlook_labels_btn")):
-                if not graph_token:
+                if not effective_graph_token:
                     st.error(t("no_graph_token_error"))
                 else:
                     try:
-                        st.session_state["outlook_categories"] = sorted(graph_get_master_categories(graph_token))
+                        st.session_state["outlook_categories"] = sorted(graph_get_master_categories(effective_graph_token))
                         st.success(t("outlook_labels_loaded", n=len(st.session_state["outlook_categories"])))
                     except Exception as e:
                         st.error(t("outlook_labels_error", e=e))
@@ -1430,7 +1614,7 @@ def main():
         if not llm_api_key:
             st.error(t("no_api_key_error"))
             return
-        if not graph_token:
+        if not effective_graph_token:
             st.error(t("no_graph_token_error2"))
             return
         if not final_model:
@@ -1446,10 +1630,10 @@ def main():
 
             with st.spinner(t("loading_emails_spinner")):
                 if analysis_mode == ANALYSIS_MODE_NOT_REPLIED:
-                    items = fetch_not_replied_messages(graph_token, int(days), int(top))
+                    items = fetch_not_replied_messages(effective_graph_token, int(days), int(top))
                     st.info(t("not_replied_loaded", n=len(items)))
                 else:
-                    items = fetch_unread_messages(graph_token, int(days), int(top))
+                    items = fetch_unread_messages(effective_graph_token, int(days), int(top))
                     st.info(t("unread_loaded", n=len(items)))
 
             items, filter_stats = filter_items_for_analysis(
@@ -1477,7 +1661,7 @@ def main():
                 result = enrich_result_with_source_metadata(result, items)
 
             st.session_state["inbox_result"] = result
-            st.session_state["graph_token"] = graph_token
+            st.session_state["graph_token"] = effective_graph_token
             initialize_bucket_overrides(result)
             st.success(t("analysis_done"))
         except APITimeoutError:
