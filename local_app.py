@@ -1349,7 +1349,7 @@ def main():
                 display_name = t(f"bucket_{bucket_key}")
                 current_label = saved_map[bucket_key]
                 options = [_custom_lbl] + existing_labels if existing_labels else [_custom_lbl]
-                default_idx = existing_labels.index(current_label) + 1 if existing_labels and current_label in existing_labels else 0
+                default_idx = existing_labels.index(current_label) + 1 if current_label in existing_labels else 0
                 selected_choice = st.selectbox(
                     display_name,
                     options=options,
@@ -1377,7 +1377,7 @@ def main():
             if add_deadline_label:
                 current_deadline_label = str(st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
                 deadline_options = [_custom_lbl] + existing_labels if existing_labels else [_custom_lbl]
-                deadline_default_idx = existing_labels.index(current_deadline_label) + 1 if existing_labels and current_deadline_label in existing_labels else 0
+                deadline_default_idx = existing_labels.index(current_deadline_label) + 1 if current_deadline_label in existing_labels else 0
                 deadline_selected_choice = st.selectbox(
                     t("deadline_label_selector"),
                     options=deadline_options,
