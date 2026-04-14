@@ -244,6 +244,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "originally_prefix": "Původně:",
         "target_category": "Cílová kategorie",
         "outlook_link_title": "Primárně otevře v Outlook aplikaci, při nedostupnosti přejde na web",
+        "mark_as_read_action": "Označit přečtené",
+        "mark_as_read_success_single": "Email označen jako přečtený",
+        "mark_as_read_error_single": "Chyba při označování emailu: {e}",
+        "auto_check_label": "Automatická kontrola emailů",
+        "auto_check_interval_label": "Interval (minuty)",
+        "graph_explorer_link": "Graph Explorer",
         # validate_system_prompt
         "prompt_empty": "Systémový prompt je prázdný.",
         "prompt_missing_json": "Chybí explicitní požadavek na validní JSON výstup.",
@@ -395,6 +401,12 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "originally_prefix": "Originally:",
         "target_category": "Target category",
         "outlook_link_title": "Opens in Outlook app primarily, falls back to web if unavailable",
+        "mark_as_read_action": "Mark as read",
+        "mark_as_read_success_single": "Email marked as read",
+        "mark_as_read_error_single": "Error marking email: {e}",
+        "auto_check_label": "Auto-check emails",
+        "auto_check_interval_label": "Interval (minutes)",
+        "graph_explorer_link": "Graph Explorer",
         # validate_system_prompt
         "prompt_empty": "System prompt is empty.",
         "prompt_missing_json": "Missing explicit requirement for valid JSON output.",
@@ -471,6 +483,8 @@ def build_settings_payload() -> dict:
         "add_deadline_label": bool(st.session_state.get("add_deadline_label", True)),
         "deadline_label_name": st.session_state.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]),
         "auto_save_settings": bool(st.session_state.get("auto_save_settings", True)),
+        "auto_check_enabled": bool(st.session_state.get("auto_check_enabled", False)),
+        "auto_check_interval_minutes": int(st.session_state.get("auto_check_interval_minutes", 5)),
         "language": st.session_state.get("language", "cs"),
     }
 
@@ -498,6 +512,8 @@ def initialize_state_from_settings() -> None:
     st.session_state["add_deadline_label"] = bool(saved.get("add_deadline_label", True))
     st.session_state["deadline_label_name"] = str(saved.get("deadline_label_name", MAILAI_DEADLINE_CATEGORY[0]))
     st.session_state["auto_save_settings"] = bool(saved.get("auto_save_settings", True))
+    st.session_state["auto_check_enabled"] = bool(saved.get("auto_check_enabled", False))
+    st.session_state["auto_check_interval_minutes"] = int(saved.get("auto_check_interval_minutes", 5))
     st.session_state["language"] = saved.get("language", "cs")
     st.session_state["settings_initialized"] = True
 
@@ -1032,7 +1048,7 @@ def build_effective_buckets(result: dict, overrides: dict[str, str]) -> dict[str
     return effective
 
 
-def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
+def render_bucket(bucket_key: str, items: list[dict], editable: bool = False, token: str = ""):
     cfg = BUCKET_UI.get(bucket_key, {"label": bucket_key, "color": "#888", "emoji": ""})
     label = t(f"bucket_{bucket_key}") if f"bucket_{bucket_key}" in TRANSLATIONS["cs"] else cfg["label"]
     color = cfg["color"]
@@ -1088,7 +1104,7 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
             )
 
         if editable and msg_id:
-            col_info, col_choice = st.columns([5, 2])
+            col_info, col_choice, col_action = st.columns([5, 1.5, 1])
             with col_info:
                 st.markdown(
                     f'<span style="color:{color}">●</span> {subject_html} | '
@@ -1105,6 +1121,13 @@ def render_bucket(bucket_key: str, items: list[dict], editable: bool = False):
                     key=f"bucket_override_{msg_id}",
                     label_visibility="collapsed",
                 )
+            with col_action:
+                if token and st.button("✓", key=f"mark_read_{msg_id}", help=t("mark_as_read_action")):
+                    try:
+                        graph_patch_read(token, msg_id)
+                        st.success(t("mark_as_read_success_single"))
+                    except Exception as e:
+                        st.error(t("mark_as_read_error_single", e=str(e)))
         else:
             st.markdown(
                 f'<span style="color:{color}">●</span> {subject_html} | '
@@ -1236,6 +1259,7 @@ def main():
             key="urgent_reminder_hours",
         )
         graph_token = st.text_input("Graph Access Token", type="password", key="graph_token_input")
+        st.markdown("[" + t("graph_explorer_link") + "](https://developer.microsoft.com/en-us/graph/graph-explorer)")
         calendar_timezone = st.text_input(t("calendar_tz_label"), key="calendar_timezone")
         days = st.number_input(t("days_label"), min_value=1, max_value=30, key="days")
         top = st.number_input(t("top_label"), min_value=10, max_value=1000, key="top")
@@ -1247,6 +1271,16 @@ def main():
         )
         priority_senders_raw = st.text_area(t("priority_senders_label"), height=80, key="priority_senders_raw")
         auto_save_settings = st.checkbox(t("auto_save_label"), key="auto_save_settings")
+        auto_check_enabled = st.checkbox(t("auto_check_label"), key="auto_check_enabled")
+        if auto_check_enabled:
+            auto_check_interval_minutes = st.number_input(
+                t("auto_check_interval_label"),
+                min_value=1,
+                max_value=60,
+                key="auto_check_interval_minutes",
+            )
+        else:
+            auto_check_interval_minutes = st.session_state.get("auto_check_interval_minutes", 5)
 
         preview_senders = [
             sender.strip() for sender in priority_senders_raw.replace(",", "\n").split("\n") if sender.strip()
@@ -1510,7 +1544,7 @@ def main():
         st.markdown(t("current_split_header"))
         st.caption(t("current_split_caption"))
         for bkey in BUCKET_ORDER:
-            render_bucket(bkey, effective_buckets.get(bkey, []), editable=True)
+            render_bucket(bkey, effective_buckets.get(bkey, []), editable=True, token=token)
 
         deadline_items = get_deadline_items(effective_buckets)
         if deadline_items:
